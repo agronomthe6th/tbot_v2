@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+alembic
+pydantic
+tinkoff-investments
+telethon
+python-dotenv
+asyncio-mqtt
+websockets
+pandas
+numpy
+python-multipart
+aiofiles

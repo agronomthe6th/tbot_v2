@@ -1,0 +1,272 @@
+/* frontend/src/style.css */
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* ===== ГЛОБАЛЬНЫЕ СТИЛИ ===== */
+
+:root {
+  --trading-bg: #1a1a1a;
+  --trading-card: #2d2d2d;
+  --trading-border: #404040;
+  --trading-green: #00d4aa;
+  --trading-red: #ff4747;
+  --trading-yellow: #ffb020;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--trading-bg);
+  color: white;
+}
+
+/* ===== КАСТОМНЫЕ SCROLLBAR ===== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--trading-card);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--trading-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+/* ===== КАСТОМНЫЕ УТИЛИТЫ ===== */
+
+.container {
+  max-width: 1400px;
+}
+
+/* ===== АНИМАЦИИ ===== */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+/* ===== КОМПОНЕНТНЫЕ СТИЛИ ===== */
+
+.btn {
+  @apply px-4 py-2 rounded font-medium text-sm transition-all duration-200;
+  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-primary {
+  @apply bg-trading-green text-black hover:bg-green-400;
+}
+
+.btn-secondary {
+  @apply bg-trading-border text-gray-300 hover:bg-gray-500 hover:text-white;
+}
+
+.btn-danger {
+  @apply bg-trading-red text-white hover:bg-red-600;
+}
+
+.input {
+  @apply bg-trading-bg border border-trading-border rounded px-3 py-2;
+  @apply text-white placeholder-gray-400;
+  @apply focus:outline-none focus:ring-2 focus:ring-trading-green focus:border-transparent;
+}
+
+.card {
+  @apply bg-trading-card border border-trading-border rounded-lg;
+}
+
+.panel {
+  @apply card p-4;
+}
+
+/* ===== ТОРГОВЫЕ ЦВЕТА ===== */
+
+.text-trading-green {
+  color: var(--trading-green);
+}
+
+.text-trading-red {
+  color: var(--trading-red);
+}
+
+.text-trading-yellow {
+  color: var(--trading-yellow);
+}
+
+.bg-trading-green {
+  background-color: var(--trading-green);
+}
+
+.bg-trading-red {
+  background-color: var(--trading-red);
+}
+
+.bg-trading-yellow {
+  background-color: var(--trading-yellow);
+}
+
+.border-trading-green {
+  border-color: var(--trading-green);
+}
+
+.border-trading-red {
+  border-color: var(--trading-red);
+}
+
+.border-trading-yellow {
+  border-color: var(--trading-yellow);
+}
+
+/* ===== RESPONSIVE HELPERS ===== */
+
+.hide-mobile {
+  @apply hidden sm:block;
+}
+
+.show-mobile {
+  @apply block sm:hidden;
+}
+
+.grid-responsive {
+  @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4;
+}
+
+/* ===== CHART SPECIFIC ===== */
+
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 400px;
+}
+
+.chart-loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.chart-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 10;
+}
+
+/* ===== TYPOGRAPHY ===== */
+
+.text-mono {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Consolas', monospace;
+}
+
+/* ===== FOCUS STATES ===== */
+
+.focus-visible:focus {
+  @apply outline-none ring-2 ring-trading-green ring-offset-2 ring-offset-trading-bg;
+}
+
+/* ===== PRINT STYLES ===== */
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* ===== HIGH CONTRAST MODE ===== */
+
+@media (prefers-contrast: high) {
+  :root {
+    --trading-border: #666666;
+  }
+}
+
+/* ===== REDUCED MOTION ===== */
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  
+  .animate-spin {
+    animation: none;
+  }
+}
+
+/* ===== DARK MODE OVERRIDES ===== */
+
+@media (prefers-color-scheme: light) {
+  /* Если пользователь предпочитает светлую тему, все равно используем темную для торгового терминала */
+  body {
+    background-color: var(--trading-bg);
+    color: white;
+  }
+}

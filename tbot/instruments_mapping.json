@@ -1,0 +1,159 @@
+{
+  "description": "Маппинг популярных российских тикеров на FIGI коды для быстрого доступа",
+  "last_updated": "2024-09-14",
+  "instruments": {
+    "SBER": {
+      "figi": "BBG004730N88",
+      "name": "Сбер Банк",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Крупнейший банк России"
+    },
+    "GAZP": {
+      "figi": "BBG004730RP0", 
+      "name": "Газпром",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Крупнейшая газовая компания мира"
+    },
+    "LKOH": {
+      "figi": "BBG004731032",
+      "name": "Лукойл",
+      "type": "share",
+      "currency": "RUB", 
+      "description": "Вертикально-интегрированная нефтяная компания"
+    },
+    "YNDX": {
+      "figi": "BBG006L8G4H1",
+      "name": "Яндекс",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Российская IT-компания"
+    },
+    "AFKS": {
+      "figi": "BBG004730ZJ9",
+      "name": "АФК Система", 
+      "type": "share",
+      "currency": "RUB",
+      "description": "Многоотраслевая корпорация"
+    },
+    "VTBR": {
+      "figi": "BBG004730JJ5",
+      "name": "ВТБ",
+      "type": "share", 
+      "currency": "RUB",
+      "description": "Второй по величине банк России"
+    },
+    "NVTK": {
+      "figi": "BBG004731489",
+      "name": "Новатэк",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Крупнейший независимый производитель природного газа"
+    },
+    "ROSN": {
+      "figi": "BBG004731354",
+      "name": "Роснефть",
+      "type": "share",
+      "currency": "RUB", 
+      "description": "Крупнейшая нефтяная компания России"
+    },
+    "GMKN": {
+      "figi": "BBG004731354",
+      "name": "ГМК Норильский никель",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Горно-металлургическая компания"
+    },
+    "MGNT": {
+      "figi": "BBG004S68473",
+      "name": "Магнит", 
+      "type": "share",
+      "currency": "RUB",
+      "description": "Розничная сеть"
+    },
+    "PLZL": {
+      "figi": "BBG004S68BH6",
+      "name": "Полюс",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Золотодобывающая компания"
+    },
+    "CHMF": {
+      "figi": "BBG004S68696",
+      "name": "Северсталь",
+      "type": "share", 
+      "currency": "RUB",
+      "description": "Металлургическая компания"
+    },
+    "NLMK": {
+      "figi": "BBG004S68614", 
+      "name": "НЛМК",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Новолипецкий металлургический комбинат"
+    },
+    "ALRS": {
+      "figi": "BBG004S68758",
+      "name": "АЛРОСА",
+      "type": "share",
+      "currency": "RUB", 
+      "description": "Алмазодобывающая компания"
+    },
+    "MOEX": {
+      "figi": "BBG004730JJ5",
+      "name": "Московская Биржа",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Московская биржа"
+    },
+    "TCSG": {
+      "figi": "BBG00QPYJ5H0", 
+      "name": "TCS Group",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Тинькофф Банк"
+    },
+    "OZON": {
+      "figi": "BBG00Y91R9T3",
+      "name": "Ozon",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Интернет-ритейлер"
+    },
+    "FIXP": {
+      "figi": "BBG00R05JT75",
+      "name": "Fix Price", 
+      "type": "share",
+      "currency": "RUB",
+      "description": "Сеть розничной торговли"
+    },
+    "RUAL": {
+      "figi": "BBG008F2T3T2",
+      "name": "РУСАЛ",
+      "type": "share",
+      "currency": "RUB",
+      "description": "Алюминиевая компания"
+    },
+    "CBOM": {
+      "figi": "BBG004S681W1",
+      "name": "МКБ",
+      "type": "share",
+      "currency": "RUB", 
+      "description": "Московский кредитный банк"
+    }
+  },
+  "categories": {
+    "banks": ["SBER", "VTBR", "TCSG", "CBOM"],
+    "oil_gas": ["GAZP", "LKOH", "ROSN", "NVTK"],
+    "tech": ["YNDX", "OZON"],
+    "metals": ["GMKN", "NLMK", "PLZL", "CHMF", "RUAL", "ALRS"],
+    "retail": ["MGNT", "FIXP"],
+    "telecom": ["AFKS"],
+    "finance": ["MOEX"]
+  },
+  "demo_signals": {
+    "most_traded": ["SBER", "GAZP", "LKOH", "YNDX", "VTBR"],
+    "for_testing": ["AFKS", "NVTK", "ROSN"]
+  }
+}
