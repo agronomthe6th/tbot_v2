@@ -1,9 +1,12 @@
-// frontend/src/router/index.js - ОБНОВЛЕННАЯ ВЕРСИЯ
+// frontend/src/router/index.js - ОБНОВЛЕННАЯ ВЕРСИЯ с новой страницей
 import { createRouter, createWebHistory } from 'vue-router'
 import TradingDashboard from '../views/TradingDashboard.vue'
 import SignalsChart from '../views/SignalsChart.vue'
 import CleanChart from '../views/CleanChart.vue'
 import TraderProfile from '../views/TraderProfile.vue'
+import AllSignals from '../views/AllSignals.vue'
+import DataDiagnostics from '../views/DataDiagnostics.vue'
+import PatternsManager from '../views/PatternsManager.vue'
 
 const routes = [
   {
@@ -25,6 +28,12 @@ const routes = [
     meta: { title: '📊 Чистый график' }
   },
   {
+    path: '/patterns',
+    name: 'PatternsManager',
+    component: PatternsManager,
+    meta: { title: '🎯 Управление паттернами' }
+  },
+  {
     path: '/trader/:id',
     name: 'TraderProfile',
     component: TraderProfile,
@@ -35,6 +44,18 @@ const routes = [
     name: 'TradersOverview',
     component: TraderProfile, // Можно использовать тот же компонент без ID для списка
     meta: { title: '👥 Трейдеры' }
+  },
+  {
+    path: '/signals',
+    name: 'AllSignals',
+    component: AllSignals,
+    meta: { title: '🎯 Все сигналы' }
+  },
+  {
+    path: '/diagnostics',
+    name: 'DataDiagnostics',
+    component: DataDiagnostics,
+    meta: { title: '🔍 Диагностика данных' }
   }
 ]
 

@@ -216,6 +216,26 @@ class Instrument(Base):
         Index('idx_instruments_type', 'type'),
     )
 
+class ParsingPattern(Base):
+    """Паттерны для парсинга сообщений (регулярные выражения)"""
+    __tablename__ = 'parsing_patterns'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    category = Column(String(50), nullable=False)
+    pattern = Column(Text, nullable=False)
+    priority = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    description = Column(Text)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_patterns_category_priority', 'category', 'priority', 'is_active'),
+        Index('idx_patterns_active', 'is_active'),
+    )
+
 class Candle(Base):
     """Свечные данные"""
     __tablename__ = 'candles'

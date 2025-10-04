@@ -1,192 +1,382 @@
-<!-- frontend/src/views/SignalsChart.vue - ИСПРАВЛЕННАЯ ВЕРСИЯ -->
 <template>
   <div class="min-h-screen bg-trading-bg text-white">
     <div class="max-w-7xl mx-auto p-4">
       
       <!-- Заголовок страницы -->
-      <div class="mb-6">
+      <div class="mb-6 fade-in">
         <h1 class="text-3xl font-bold mb-2">📈 График с сигналами трейдеров</h1>
         <p class="text-gray-400">Анализ торговых сигналов на графике свечей</p>
       </div>
 
-      <!-- Простые контролы (без ChartControls) -->
-      <div class="mb-6">
-        <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+      <!-- Основные контролы -->
+      <div class="mb-6 slide-up">
+        <div class="bg-trading-card rounded-lg border border-trading-border p-4 hover:border-trading-green/30 transition-colors duration-300">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             
-            <!-- Выбор тикера -->
+            <!-- Поиск тикера -->
             <div class="control-group">
               <label class="control-label">Тикер</label>
-              <div class="ticker-selector">
-                <select 
-                  v-model="selectedTicker" 
-                  @change="handleTickerChange"
-                  class="ticker-select"
-                  :disabled="isLoading"
+              <div class="relative">
+                <input
+                  v-model="tickerSearch"
+                  @input="filterTickers"
+                  @focus="showTickerDropdown = true"
+                  @blur="hideTickerDropdown"
+                  :placeholder="selectedTicker || 'Поиск тикера...'"
+                  class="ticker-search-input"
+                  :disabled="isLoading || isLoadingSignals"
+                />
+                
+                <!-- Dropdown со списком тикеров -->
+                <div 
+                  v-if="showTickerDropdown && filteredTickers.length > 0" 
+                  class="ticker-dropdown"
                 >
-                  <option value="" disabled>Выберите тикер</option>
-                  <option 
-                    v-for="ticker in availableTickers" 
+                  <div
+                    v-for="ticker in filteredTickers.slice(0, 10)"
                     :key="ticker.ticker"
-                    :value="ticker.ticker"
+                    @mousedown="selectTicker(ticker.ticker)"
+                    class="ticker-option"
                   >
-                    {{ ticker.ticker }} ({{ ticker.signal_count }} сигналов)
-                  </option>
-                </select>
+                    <span class="font-medium">{{ ticker.ticker }}</span>
+                    <span class="text-sm text-gray-400">({{ ticker.signal_count || 0 }})</span>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <!-- Период -->
+            <!-- Период для графика -->
             <div class="control-group">
-              <label class="control-label">Период</label>
+              <label class="control-label">Период графика</label>
               <select 
-                v-model="chartDays" 
+                v-model="chartDays"
                 @change="handleDaysChange"
-                class="period-select"
+                class="period-select smooth-transition"
                 :disabled="isLoading"
               >
-                <option :value="7">7 дней</option>
-                <option :value="14">14 дней</option>
-                <option :value="30">30 дней</option>
-                <option :value="60">60 дней</option>
-                <option :value="90">90 дней</option>
+                <option value="7">7 дней</option>
+                <option value="30">30 дней</option>
+                <option value="90">90 дней</option>
+                <option value="180">180 дней</option>
               </select>
             </div>
 
-            <!-- Действия -->
+            <!-- Кнопка обновления -->
             <div class="control-group">
-              <label class="control-label">Действия</label>
-              <div class="flex space-x-2">
+              <label class="control-label">&nbsp;</label>
+              <button 
+                @click="handleRefresh"
+                :disabled="isLoading || isLoadingSignals"
+                class="refresh-button"
+              >
+                <span v-if="isLoading || isLoadingSignals" class="inline-flex items-center">
+                  <svg class="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="m4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Загрузка...
+                </span>
+                <span v-else>🔄 Обновить</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Фильтры сигналов -->
+        <div v-if="selectedTicker" class="bg-trading-card rounded-lg border border-trading-border p-4 mt-4 slide-up-delayed">
+          <h3 class="text-lg font-semibold mb-3">🔍 Фильтры сигналов</h3>
+          <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+            
+            <!-- Период сигналов -->
+            <div class="control-group">
+              <label class="control-label">Период сигналов</label>
+              <select 
+                v-model="signalsDays"
+                @change="loadSignalsForTicker"
+                class="filter-select smooth-transition"
+                :disabled="isLoadingSignals"
+              >
+                <option value="7">7 дней</option>
+                <option value="30">30 дней</option>
+                <option value="90">90 дней</option>
+                <option value="180">180 дней</option>
+              </select>
+            </div>
+
+            <!-- Направление -->
+            <div class="control-group">
+              <label class="control-label">Направление</label>
+              <select v-model="signalsFilters.direction" @change="applySignalsFilters" class="filter-select smooth-transition">
+                <option value="all">Все</option>
+                <option value="long">Long</option>
+                <option value="short">Short</option>
+                <option value="exit">Exit</option>
+              </select>
+            </div>
+
+            <!-- Автор -->
+            <div class="control-group">
+              <label class="control-label">Автор</label>
+              <select v-model="signalsFilters.author" @change="applySignalsFilters" class="filter-select smooth-transition">
+                <option value="">Все авторы</option>
+                <option v-for="author in availableAuthors" :key="author" :value="author">
+                  {{ author }}
+                </option>
+              </select>
+            </div>
+
+            <!-- Период фильтра -->
+            <div class="control-group">
+              <label class="control-label">Период</label>
+              <select v-model="signalsFilters.period" @change="applySignalsFilters" class="filter-select smooth-transition">
+                <option value="">Весь период</option>
+                <option value="1d">За день</option>
+                <option value="3d">За 3 дня</option>
+                <option value="7d">За неделю</option>
+                <option value="30d">За месяц</option>
+              </select>
+            </div>
+
+            <!-- Сортировка -->
+            <div class="control-group">
+              <label class="control-label">Сортировка</label>
+              <select v-model="signalsFilters.order_by" @change="applySignalsFilters" class="filter-select smooth-transition">
+                <option value="timestamp">По времени</option>
+                <option value="ticker">По тикеру</option>
+                <option value="author">По автору</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Статистика фильтрации -->
+          <div class="mt-3 flex items-center justify-between text-sm text-gray-400 counter-animation">
+            <div>
+              Найдено: <span class="text-white font-medium">{{ filteredSignals.length }}</span> из {{ allSignals.length }} сигналов
+            </div>
+            <div class="flex gap-4">
+              <span class="signal-counter text-trading-green">Long: {{ longSignalsCount }}</span>
+              <span class="signal-counter text-trading-red">Short: {{ shortSignalsCount }}</span>
+              <span class="signal-counter text-purple-400">Exit: {{ exitSignalsCount }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Статистика -->
+      <div v-if="selectedTicker" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 slide-up">
+        <div class="stat-card">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-2xl font-bold text-white">{{ selectedTicker }}</div>
+              <div class="text-sm text-gray-400">Тикер</div>
+            </div>
+            <div class="text-3xl">🎯</div>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-2xl font-bold text-trading-green counter-up">{{ allSignals.length }}</div>
+              <div class="text-sm text-gray-400">Сигналов</div>
+            </div>
+            <div class="text-3xl">📊</div>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-2xl font-bold text-trading-yellow">{{ chartDays }}</div>
+              <div class="text-sm text-gray-400">Дней графика</div>
+            </div>
+            <div class="text-3xl">📅</div>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-2xl font-bold" :class="priceChangeColor">
+                {{ priceChange ? (priceChange > 0 ? '+' : '') + priceChange.toFixed(2) + '%' : '—' }}
+              </div>
+              <div class="text-sm text-gray-400">Изменение</div>
+            </div>
+            <div class="text-3xl">📈</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ошибки -->
+      <div v-if="anyError" class="mb-6 slide-up">
+        <div class="error-message">
+          ❌ {{ anyError }}
+          <button 
+            @click="clearErrors" 
+            class="ml-4 underline hover:no-underline transition-colors"
+          >
+            Скрыть
+          </button>
+        </div>
+      </div>
+
+      <!-- График -->
+      <div class="mb-6 slide-up">
+        <div class="chart-container">
+          <!-- Заголовок графика -->
+          <div class="px-4 py-3 border-b border-trading-border">
+            <div class="flex items-center justify-between">
+              <h2 class="text-xl font-semibold">
+                📊 {{ selectedTicker || 'Выберите тикер' }}
+                <span v-if="selectedTicker" class="text-sm text-gray-400 ml-2">
+                  ({{ chartDays }} дн. / {{ signalsDays }} дн. сигналов)
+                </span>
+              </h2>
+              
+              <!-- Управление сигналами на графике -->
+              <div class="flex items-center space-x-2">
                 <button 
-                  @click="handleRefresh"
-                  :disabled="isLoading"
-                  class="action-btn refresh"
+                  @click="toggleSignalsOnChart"
+                  :class="showSignalsOnChart ? 'bg-trading-green text-black' : 'bg-gray-600 text-white'"
+                  class="px-3 py-1 text-sm rounded transition-all duration-300 hover:scale-105"
                 >
-                  <span v-if="isLoading">🔄</span>
-                  <span v-else>🔄</span>
-                  Обновить
+                  {{ showSignalsOnChart ? '👁️ Скрыть сигналы' : '👁️‍🗨️ Показать сигналы' }}
                 </button>
               </div>
             </div>
           </div>
 
-          <!-- Ошибки -->
-          <div v-if="anyError" class="mt-4 error-message">
-            ⚠️ {{ anyError }}
-            <button @click="clearErrors" class="ml-2 underline">Скрыть</button>
+          <!-- График -->
+          <div class="p-4">
+            <UnifiedTradingChart
+              :ticker="selectedTicker"
+              :candles-data="candlesData"
+              :signals-data="showSignalsOnChart ? filteredSignals : []"
+              :show-signals="showSignalsOnChart"
+              :current-price="currentPrice"
+              :is-loading="isLoading"
+              :candles-error="candlesError"
+              :signals-error="signalsError"
+              :chart-height="400"
+              @retry="handleRefresh"
+              class="rounded-lg"
+            />
           </div>
         </div>
       </div>
 
-      <!-- График -->
-      <div class="bg-trading-card rounded-lg border border-trading-border overflow-hidden">
-        <div class="p-4 border-b border-trading-border">
-          <h2 class="text-xl font-semibold">
-            {{ selectedTicker ? `${selectedTicker} - График с сигналами` : 'Выберите тикер для просмотра' }}
-          </h2>
-        </div>
-        
-        <div class="p-4">
-          <!-- Реальный график -->
-          <TradingChart
-            v-if="selectedTicker && candlesData.length > 0"
-            :ticker="selectedTicker"
-            :candles-data="formattedCandles"
-            :signals-data="signalsData"
-            :current-price="currentPrice"
-            :is-loading="isLoading"
-            :error="anyError"
-            :chart-days="chartDays"
-            @retry="handleRefresh"
-          />
-          
-          <!-- Загрузка -->
-          <div v-else-if="isLoading" class="text-center py-20">
-            <div class="animate-spin w-8 h-8 border-2 border-trading-green border-t-transparent rounded-full mx-auto mb-4"></div>
-            <div class="text-gray-400">Загрузка данных...</div>
-          </div>
-          
-          <!-- Нет тикера -->
-          <div v-else-if="!selectedTicker" class="text-center py-20 text-gray-400">
-            <div class="text-6xl mb-4">📈</div>
-            <div class="text-xl mb-2">Выберите инструмент</div>
-            <div class="text-sm">Выберите тикер из списка выше для просмотра графика</div>
-          </div>
-
-          <!-- Нет данных -->
-          <div v-else class="text-center py-20 text-gray-400">
-            <div class="text-6xl mb-4">📭</div>
-            <div class="text-xl mb-2">Нет данных</div>
-            <div class="text-sm">Для выбранного тикера нет данных за указанный период</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Дополнительная информация -->
-      <div v-if="selectedTicker && (candlesData.length > 0 || signalsData.length > 0)" class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-        
-        <!-- Статистика сигналов -->
-        <div class="bg-trading-card rounded-lg border border-trading-border">
-          <div class="p-4 border-b border-trading-border">
-            <h3 class="text-lg font-semibold">📊 Статистика сигналов</h3>
-          </div>
-          <div class="p-4">
-            <div v-if="signalsData.length > 0" class="grid grid-cols-2 gap-4 text-center">
-              <div>
-                <div class="text-2xl font-bold text-white">{{ signalsData.length }}</div>
-                <div class="text-sm text-gray-400">Всего сигналов</div>
-              </div>
-              <div>
-                <div class="text-2xl font-bold text-trading-green">{{ buySignalsCount }}</div>
-                <div class="text-sm text-gray-400">Покупок</div>
-              </div>
-              <div>
-                <div class="text-2xl font-bold text-trading-red">{{ sellSignalsCount }}</div>
-                <div class="text-sm text-gray-400">Продаж</div>
-              </div>
-              <div>
-                <div class="text-2xl font-bold text-trading-yellow">{{ signalsRatio }}</div>
-                <div class="text-sm text-gray-400">Соотношение</div>
-              </div>
-            </div>
-            <div v-else class="text-center py-8 text-gray-400">
-              <div class="text-2xl mb-2">📈</div>
-              <div>Статистика будет доступна после загрузки сигналов</div>
+      <!-- Список сигналов ПОД графиком -->
+      <div class="signals-list-container slide-up">
+        <!-- Заголовок списка сигналов -->
+        <div class="px-4 py-3 border-b border-trading-border">
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold">
+              🔍 Сигналы{{ selectedTicker ? ` для ${selectedTicker}` : '' }}
+            </h3>
+            <div class="text-sm text-gray-400">
+              {{ filteredSignals.length > 0 ? `Показано ${filteredSignals.length} сигналов` : 'Нет сигналов' }}
             </div>
           </div>
         </div>
 
-        <!-- Последние сигналы -->
-        <div class="bg-trading-card rounded-lg border border-trading-border">
-          <div class="p-4 border-b border-trading-border">
-            <h3 class="text-lg font-semibold">🎯 Последние сигналы</h3>
-          </div>
-          <div class="p-4">
-            <div v-if="signalsData.length > 0" class="space-y-3 max-h-64 overflow-y-auto">
-              <div 
-                v-for="signal in signalsData.slice(0, 5)" 
-                :key="signal.id"
-                class="p-3 bg-trading-bg border border-trading-border rounded"
-              >
-                <div class="flex justify-between items-center mb-1">
-                  <span class="font-semibold text-white">{{ signal.ticker }}</span>
-                  <span 
-                    class="text-sm font-medium"
-                    :class="getDirectionColor(signal.direction)"
-                  >
-                    {{ getDirectionIcon(signal.direction) }} {{ getDirectionText(signal.direction) }}
-                  </span>
+        <!-- Список сигналов -->
+        <div class="max-h-96 overflow-y-auto">
+          <!-- Скелетон загрузки -->
+          <div v-if="isLoadingSignals" class="p-8">
+            <div class="space-y-4 animate-pulse">
+              <div class="flex items-center space-x-4">
+                <div class="h-10 bg-gray-700 rounded-full w-10"></div>
+                <div class="flex-1 space-y-2">
+                  <div class="h-4 bg-gray-700 rounded w-3/4"></div>
+                  <div class="h-3 bg-gray-700 rounded w-1/2"></div>
                 </div>
-                <div class="flex justify-between items-center text-xs text-gray-400">
-                  <span>{{ formatDate(signal.timestamp) }}</span>
-                  <span>{{ signal.author || 'Unknown' }}</span>
+              </div>
+              <div class="flex items-center space-x-4">
+                <div class="h-10 bg-gray-700 rounded-full w-10"></div>
+                <div class="flex-1 space-y-2">
+                  <div class="h-4 bg-gray-700 rounded w-2/3"></div>
+                  <div class="h-3 bg-gray-700 rounded w-1/3"></div>
+                </div>
+              </div>
+              <div class="flex items-center space-x-4">
+                <div class="h-10 bg-gray-700 rounded-full w-10"></div>
+                <div class="flex-1 space-y-2">
+                  <div class="h-4 bg-gray-700 rounded w-4/5"></div>
+                  <div class="h-3 bg-gray-700 rounded w-2/5"></div>
                 </div>
               </div>
             </div>
-            <div v-else class="text-center py-8 text-gray-400">
-              <div class="text-2xl mb-2">🎯</div>
-              <div>Нет сигналов для отображения</div>
+          </div>
+
+          <!-- Ошибка -->
+          <div v-else-if="signalsError" class="p-8 text-center">
+            <div class="text-6xl mb-4">❌</div>
+            <h3 class="text-lg font-semibold mb-2">Ошибка загрузки</h3>
+            <p class="text-gray-400 mb-4">{{ signalsError }}</p>
+            <button 
+              @click="loadSignalsForTicker"
+              class="px-4 py-2 bg-trading-green hover:bg-green-600 text-black rounded-md transition-all duration-300 hover:scale-105"
+            >
+              🔄 Попробовать снова
+            </button>
+          </div>
+
+          <!-- Список сигналов -->
+          <div v-else-if="filteredSignals.length > 0" class="divide-y divide-trading-border">
+            <div 
+              v-for="(signal, index) in paginatedSignals" 
+              :key="signal.id"
+              @click="onSignalClick(signal)"
+              class="signal-item"
+              :style="{ animationDelay: `${index * 50}ms` }"
+            >
+              <SignalCard 
+                :signal="signal"
+                :show-details="true"
+              />
             </div>
+            
+            <!-- Пагинация -->
+            <div v-if="totalSignalsPages > 1" class="p-4 border-t border-trading-border">
+              <div class="flex items-center justify-between">
+                <button 
+                  @click="prevSignalsPage"
+                  :disabled="currentSignalsPage <= 1"
+                  class="pagination-button"
+                >
+                  ← Предыдущая
+                </button>
+                <span class="text-sm text-gray-400">
+                  Страница {{ currentSignalsPage }} из {{ totalSignalsPages }}
+                </span>
+                <button 
+                  @click="nextSignalsPage"
+                  :disabled="currentSignalsPage >= totalSignalsPages"
+                  class="pagination-button"
+                >
+                  Следующая →
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Пустое состояние -->
+          <div v-else class="p-8 text-center">
+            <div class="text-6xl mb-4">🎯</div>
+            <h3 class="text-lg font-semibold mb-2">Сигналов не найдено</h3>
+            <p class="text-gray-400 mb-4">
+              {{ selectedTicker ? 
+                `Для тикера ${selectedTicker} нет сигналов или они не соответствуют фильтрам` : 
+                'Выберите тикер для просмотра сигналов' 
+              }}
+            </p>
+            <button 
+              v-if="selectedTicker"
+              @click="resetSignalsFilters"
+              class="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded transition-all duration-300 hover:scale-105"
+            >
+              🔄 Сбросить фильтры
+            </button>
           </div>
         </div>
       </div>
@@ -195,10 +385,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTradingStore } from '../stores/tradingStore.js'
-import TradingChart from '../components/charts/TradingChart.vue'
+import { tradingAPI } from '../services/api'
+import UnifiedTradingChart from '../components/charts/UnifiedTradingChart.vue'
+import SignalCard from '../components/SignalCard.vue'
 
 // Router
 const route = useRoute()
@@ -207,7 +399,6 @@ const router = useRouter()
 // Store
 const store = useTradingStore()
 
-// Computed properties из store
 const selectedTicker = computed({
   get: () => store.selectedTicker,
   set: (value) => store.selectedTicker = value
@@ -218,133 +409,285 @@ const chartDays = computed({
   set: (value) => store.chartDays = value
 })
 
+const formattedCandles = computed(() => {
+  const formatted = store.formattedCandles || []
+  console.log('📊 SignalsChart: Using formattedCandles:', formatted.slice(0, 2))
+  return formatted
+})
 const candlesData = computed(() => store.candlesData || [])
-const signalsData = computed(() => store.signalsData || [])
 const availableTickers = computed(() => store.availableTickers || [])
 const currentPrice = computed(() => store.currentPrice)
-const formattedCandles = computed(() => store.formattedCandles || [])
-
-// Loading states
 const isLoading = computed(() => store.isLoading)
-
-// Errors
+const candlesError = computed(() => store.candlesError)
 const anyError = computed(() => {
-  return store.candlesError || store.signalsError || store.tickersError
+  return store.candlesError || store.tickersError || signalsError.value
 })
 
-// Signal statistics - ИСПРАВЛЕННАЯ ЛОГИКА с DEBUG
-const buySignalsCount = computed(() => {
-  if (!signalsData.value) return 0
+const priceChange = computed(() => {
+  if (!formattedCandles.value || formattedCandles.value.length < 2) return null
   
-  // DEBUG: Логируем все направления сигналов
-  if (signalsData.value.length > 0) {
-    console.log('🔍 DEBUG: All signal directions:', signalsData.value.map(s => s.direction))
+  const firstPrice = formattedCandles.value[0].open
+  const lastPrice = formattedCandles.value[formattedCandles.value.length - 1].close
+  
+  return ((lastPrice - firstPrice) / firstPrice) * 100
+})
+
+const priceChangeColor = computed(() => {
+  if (!priceChange.value) return 'text-gray-400'
+  return priceChange.value > 0 ? 'text-trading-green' : 'text-trading-red'
+})
+
+// Поиск тикеров
+const tickerSearch = ref('')
+const showTickerDropdown = ref(false)
+const filteredTickers = ref([])
+
+function filterTickers() {
+  if (!tickerSearch.value.trim()) {
+    filteredTickers.value = availableTickers.value
+  } else {
+    const searchTerm = tickerSearch.value.toLowerCase()
+    filteredTickers.value = availableTickers.value.filter(ticker => 
+      ticker.ticker.toLowerCase().includes(searchTerm)
+    )
   }
-  
-  return signalsData.value.filter(s => {
-    const direction = s.direction?.toLowerCase()
-    const isBuy = direction === 'buy' || direction === 'long' || direction === 'покупка'
-    
-    if (isBuy) {
-      console.log(`✅ BUY signal detected: "${s.direction}" -> ${direction}`)
+}
+
+function selectTicker(ticker) {
+  selectedTicker.value = ticker
+  tickerSearch.value = ''
+  showTickerDropdown.value = false
+  handleTickerChange()
+}
+
+function hideTickerDropdown() {
+  setTimeout(() => {
+    showTickerDropdown.value = false
+  }, 200)
+}
+
+// Инициализация поиска тикеров
+watch(() => availableTickers.value, () => {
+  filteredTickers.value = availableTickers.value
+}, { immediate: true })
+
+// Сигналы - локальное состояние
+const signalsDays = ref(30)
+const showSignalsOnChart = ref(true)
+const allSignals = ref([])
+const isLoadingSignals = ref(false)
+const signalsError = ref(null)
+const availableAuthors = ref([])
+
+// Фильтры сигналов
+const signalsFilters = ref({
+  direction: 'all',
+  author: '',
+  period: '',
+  order_by: 'timestamp'
+})
+
+const currentSignalsPage = ref(1)
+const signalsPerPage = ref(20)
+const filteredSignals = computed(() => {
+  let filtered = [...allSignals.value]
+
+  if (signalsFilters.value.direction !== 'all') {
+    filtered = filtered.filter(signal => {
+      const direction = signal.direction?.toLowerCase()
+      return direction === signalsFilters.value.direction || 
+             (signalsFilters.value.direction === 'long' && (direction === 'buy' || direction === 'long')) ||
+             (signalsFilters.value.direction === 'short' && (direction === 'sell' || direction === 'short'))
+    })
+  }
+
+  if (signalsFilters.value.author) {
+    filtered = filtered.filter(signal => signal.author === signalsFilters.value.author)
+  }
+
+  if (signalsFilters.value.period) {
+    const now = new Date()
+    const periodMs = {
+      '1d': 24 * 60 * 60 * 1000,
+      '3d': 3 * 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000
+    }[signalsFilters.value.period]
+
+    if (periodMs) {
+      const cutoff = new Date(now.getTime() - periodMs)
+      filtered = filtered.filter(signal => {
+        const signalDate = new Date(signal.timestamp || signal.datetime)
+        return signalDate >= cutoff
+      })
     }
-    
-    return isBuy
-  }).length
-})
+  }
 
-const sellSignalsCount = computed(() => {
-  if (!signalsData.value) return 0
-  
-  return signalsData.value.filter(s => {
-    const direction = s.direction?.toLowerCase()  
-    const isSell = direction === 'sell' || direction === 'short' || direction === 'продажа'
-    
-    if (isSell) {
-      console.log(`✅ SELL signal detected: "${s.direction}" -> ${direction}`)
+  filtered.sort((a, b) => {
+    const field = signalsFilters.value.order_by
+    if (field === 'timestamp') {
+      return new Date(b.timestamp || b.datetime) - new Date(a.timestamp || a.timestamp)
+    } else if (field === 'ticker') {
+      return (a.ticker || '').localeCompare(b.ticker || '')
+    } else if (field === 'author') {
+      return (a.author || '').localeCompare(b.author || '')
     }
-    
-    return isSell
+    return 0
+  })
+
+  return filtered
+})
+
+const totalSignalsPages = computed(() => Math.ceil(filteredSignals.value.length / signalsPerPage.value))
+const paginatedSignals = computed(() => {
+  const start = (currentSignalsPage.value - 1) * signalsPerPage.value
+  const end = start + signalsPerPage.value
+  return filteredSignals.value.slice(start, end)
+})
+
+const longSignalsCount = computed(() => 
+  filteredSignals.value.filter(s => {
+    const dir = s.direction?.toLowerCase()
+    return dir === 'long' || dir === 'buy'
   }).length
-})
+)
 
-const signalsRatio = computed(() => {
-  if (buySignalsCount.value === 0 && sellSignalsCount.value === 0) return '0:0'
-  return `${buySignalsCount.value}:${sellSignalsCount.value}`
-})
+const shortSignalsCount = computed(() => 
+  filteredSignals.value.filter(s => {
+    const dir = s.direction?.toLowerCase()
+    return dir === 'short' || dir === 'sell'
+  }).length
+)
 
-// Methods
+const exitSignalsCount = computed(() => 
+  filteredSignals.value.filter(s => {
+    const dir = s.direction?.toLowerCase()
+    return dir === 'exit' || dir === 'close'
+  }).length
+)
+
 async function handleTickerChange() {
   if (selectedTicker.value) {
     console.log('🔄 Changing ticker to:', selectedTicker.value)
+    
+    resetSignalsFilters()
+    
     await store.setTicker(selectedTicker.value)
     
-    // Обновляем URL
+    await loadSignalsForTicker()
+    
     if (route.params.ticker !== selectedTicker.value) {
       await router.replace(`/signals-chart/${selectedTicker.value}`)
     }
   }
 }
 
-function handleDaysChange() {
+async function handleDaysChange() {
   if (selectedTicker.value) {
     console.log('📅 Changing days to:', chartDays.value)
     store.setChartDays(chartDays.value)
+    await store.loadCandles(selectedTicker.value, chartDays.value)
   }
 }
 
 async function handleRefresh() {
   console.log('🔄 Force refresh')
-  await store.forceReloadData()
+  await Promise.all([
+    store.forceReloadData(),
+    loadSignalsForTicker()
+  ])
 }
 
 function clearErrors() {
+  signalsError.value = null
   store.clearErrors()
 }
 
-function formatDate(dateString) {
+// Методы загрузки сигналов
+async function loadSignalsForTicker() {
+  if (!selectedTicker.value) {
+    allSignals.value = []
+    availableAuthors.value = []
+    return
+  }
+
+  isLoadingSignals.value = true
+  signalsError.value = null
+
   try {
-    const date = new Date(dateString)
-    return date.toLocaleDateString('ru-RU', {
-      day: '2-digit',
-      month: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
+    console.log('🎯 Loading signals for ticker:', selectedTicker.value)
+
+    const response = await tradingAPI.getSignals({
+      ticker: selectedTicker.value,
+      days_back: signalsDays.value,
+      limit: 500,
+      include_stats: true
     })
-  } catch {
-    return 'N/A'
+
+    allSignals.value = response.signals || []
+    
+    // Собираем уникальных авторов
+    const authors = new Set()
+    allSignals.value.forEach(signal => {
+      if (signal.author) {
+        authors.add(signal.author)
+      }
+    })
+    availableAuthors.value = Array.from(authors).sort()
+
+    console.log('✅ Loaded signals:', allSignals.value.length)
+
+  } catch (error) {
+    console.error('❌ Error loading signals:', error)
+    signalsError.value = error.message || 'Ошибка загрузки сигналов'
+    allSignals.value = []
+    availableAuthors.value = []
+  } finally {
+    isLoadingSignals.value = false
   }
 }
 
-// НОВЫЕ ФУНКЦИИ для правильного отображения направлений с DEBUG
-function getDirectionIcon(direction) {
-  const dir = direction?.toLowerCase()
-  console.log(`🔍 getDirectionIcon: "${direction}" -> "${dir}"`)
-  
-  if (dir === 'buy' || dir === 'long' || dir === 'покупка') return '🟢'
-  if (dir === 'sell' || dir === 'short' || dir === 'продажа') return '🔴'
-  return '⚪'
+function applySignalsFilters() {
+  console.log('🔍 Applying signals filters:', signalsFilters.value)
+  currentSignalsPage.value = 1
 }
 
-function getDirectionText(direction) {
-  const dir = direction?.toLowerCase()
-  console.log(`🔍 getDirectionText: "${direction}" -> "${dir}"`)
-  
-  if (dir === 'buy' || dir === 'long' || dir === 'покупка') return 'Покупка'
-  if (dir === 'sell' || dir === 'short' || dir === 'продажа') return 'Продажа'
-  return direction || 'Unknown'
+function resetSignalsFilters() {
+  console.log('🗑️ Resetting signals filters')
+  signalsFilters.value = {
+    direction: 'all',
+    author: '',
+    period: '',
+    order_by: 'timestamp'
+  }
+  currentSignalsPage.value = 1
 }
 
-function getDirectionColor(direction) {
-  const dir = direction?.toLowerCase()
-  if (dir === 'buy' || dir === 'long' || dir === 'покупка') return 'text-trading-green'
-  if (dir === 'sell' || dir === 'short' || dir === 'продажа') return 'text-trading-red'
-  return 'text-gray-400'
+function toggleSignalsOnChart() {
+  showSignalsOnChart.value = !showSignalsOnChart.value
+  console.log('👁️ Toggled signals on chart:', showSignalsOnChart.value)
 }
 
-// Lifecycle
+// Пагинация
+function nextSignalsPage() {
+  if (currentSignalsPage.value < totalSignalsPages.value) {
+    currentSignalsPage.value++
+  }
+}
+
+function prevSignalsPage() {
+  if (currentSignalsPage.value > 1) {
+    currentSignalsPage.value--
+  }
+}
+
+function onSignalClick(signal) {
+  console.log('🎯 Signal clicked:', signal)
+}
+
+// Lifecycle - как в CleanChart
 onMounted(async () => {
-  console.log('📈 SignalsChart mounted, route params:', route.params)
+  console.log('📊 SignalsChart mounted, route params:', route.params)
   
   try {
     // Определяем правильный тикер из URL
@@ -360,21 +703,87 @@ onMounted(async () => {
       await store.setTicker(routeTicker)
     }
     
+    // Загружаем сигналы если есть тикер
+    if (store.selectedTicker) {
+      await loadSignalsForTicker()
+    }
+    
   } catch (error) {
     console.error('❌ Error initializing SignalsChart:', error)
   }
 })
 
-// Watchers
+// Watchers - как в CleanChart
 watch(() => route.params.ticker, async (newTicker) => {
   if (newTicker && newTicker.toUpperCase() !== selectedTicker.value) {
     selectedTicker.value = newTicker.toUpperCase()
     await handleTickerChange()
   }
 })
+
+watch(() => signalsFilters.value, () => {
+  currentSignalsPage.value = 1
+}, { deep: true })
+
+watch(() => signalsDays.value, (newDays) => {
+  if (selectedTicker.value && newDays) {
+    console.log('📅 Signals days changed to:', newDays)
+    loadSignalsForTicker()
+  }
+})
 </script>
 
 <style scoped>
+/* Анимации появления */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    opacity: 0; 
+    transform: translateY(20px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+@keyframes slideInSignal {
+  from { 
+    opacity: 0; 
+    transform: translateX(-20px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateX(0); 
+  }
+}
+
+/* Классы анимации */
+.fade-in {
+  animation: fadeIn 0.6s ease-out;
+}
+
+.slide-up {
+  animation: slideUp 0.6s ease-out;
+}
+
+.slide-up-delayed {
+  animation: slideUp 0.6s ease-out 0.2s both;
+}
+
+.signal-item {
+  animation: slideInSignal 0.3s ease-out both;
+}
+
+.counter-animation {
+  animation: fadeIn 0.8s ease-out;
+}
+
+/* Базовые стили */
 .control-group {
   @apply space-y-2;
 }
@@ -383,35 +792,113 @@ watch(() => route.params.ticker, async (newTicker) => {
   @apply block text-sm font-medium text-gray-300;
 }
 
-.ticker-select,
-.period-select {
+.smooth-transition {
+  @apply transition-all duration-300;
+}
+
+/* Поиск тикеров */
+.ticker-search-input {
   @apply w-full px-3 py-2 bg-trading-bg border border-trading-border rounded;
-  @apply text-white focus:border-trading-green focus:outline-none;
-  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply text-white focus:ring-2 focus:ring-trading-green focus:border-trading-green;
+  @apply transition-all duration-300;
 }
 
-.ticker-selector {
-  @apply flex items-center space-x-2;
+.ticker-dropdown {
+  @apply absolute top-full left-0 right-0 z-50 bg-trading-card border border-trading-border rounded-md mt-1;
+  @apply max-h-64 overflow-y-auto shadow-lg;
 }
 
-.action-btn {
-  @apply flex items-center justify-center space-x-2 px-4 py-2 rounded;
-  @apply font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed;
-  @apply transition-all duration-200;
+.ticker-option {
+  @apply px-3 py-2 hover:bg-trading-green hover:text-black cursor-pointer transition-colors duration-200;
+  @apply flex items-center justify-between;
 }
 
-.action-btn.refresh {
-  @apply bg-trading-green text-black hover:bg-green-400;
+/* Селекты */
+.period-select,
+.filter-select {
+  @apply w-full px-3 py-2 bg-trading-bg border border-trading-border rounded;
+  @apply text-white focus:ring-2 focus:ring-trading-green focus:border-trading-green;
+  @apply transition-all duration-300 hover:border-trading-green/50;
 }
 
+/* Кнопки */
+.refresh-button {
+  @apply w-full px-3 py-2 bg-trading-green hover:bg-green-600 text-black rounded;
+  @apply font-medium transition-all duration-300 hover:scale-105;
+  @apply disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100;
+}
+
+.pagination-button {
+  @apply px-3 py-1 text-sm bg-gray-600 hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply rounded transition-all duration-300 hover:scale-105 disabled:hover:scale-100;
+}
+
+/* Карточки статистики */
+.stat-card {
+  @apply bg-trading-card rounded-lg border border-trading-border p-4;
+  @apply hover:border-trading-green/30 transition-all duration-300 hover:scale-105;
+}
+
+/* Контейнеры */
+.chart-container {
+  @apply bg-trading-card rounded-lg border border-trading-border overflow-hidden;
+  @apply hover:border-trading-green/30 transition-colors duration-300;
+}
+
+.signals-list-container {
+  @apply bg-trading-card rounded-lg border border-trading-border;
+  @apply hover:border-trading-green/30 transition-colors duration-300;
+}
+
+/* Сообщения об ошибках */
 .error-message {
-  @apply bg-red-900/50 border border-red-700 rounded p-3 text-red-200;
+  @apply bg-red-900/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg;
+  @apply transition-all duration-300;
 }
 
-/* Адаптивность */
-@media (max-width: 640px) {
-  .control-group {
-    @apply space-y-2;
+/* Интерактивные элементы сигналов */
+.signal-item {
+  @apply p-4 hover:bg-trading-bg cursor-pointer transition-all duration-300;
+  @apply border-l-4 border-transparent hover:border-trading-green;
+  @apply hover:transform hover:scale-[1.02];
+}
+
+/* Счетчики */
+.signal-counter {
+  @apply transition-all duration-300 hover:scale-110;
+}
+
+.counter-up {
+  animation: fadeIn 0.8s ease-out;
+}
+
+/* Кастомный скроллбар */
+.overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 3px;
+  transition: background-color 0.3s;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background: #00d4aa;
+}
+
+/* Отзывчивость */
+@media (max-width: 768px) {
+  .stat-card {
+    @apply hover:scale-100;
+  }
+  
+  .signal-item {
+    @apply hover:scale-100;
   }
 }
 </style>

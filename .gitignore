@@ -146,6 +146,7 @@ data.db*
 
 # ===== LOGS =====
 logs/
+helpers/
 *.log
 npm-debug.log*
 yarn-debug.log*

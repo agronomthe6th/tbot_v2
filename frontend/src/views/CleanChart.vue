@@ -3,13 +3,11 @@
   <div class="min-h-screen bg-trading-bg text-white">
     <div class="max-w-7xl mx-auto p-4">
       
-      <!-- Заголовок страницы -->
       <div class="mb-6">
         <h1 class="text-3xl font-bold mb-2">📊 Чистый график</h1>
         <p class="text-gray-400">График свечей без торговых сигналов</p>
       </div>
 
-      <!-- Контролы -->
       <div class="mb-6">
         <div class="bg-trading-card rounded-lg border border-trading-border p-4">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -17,23 +15,21 @@
             <!-- Выбор тикера -->
             <div class="control-group">
               <label class="control-label">Тикер</label>
-              <div class="ticker-selector">
-                <select 
-                  v-model="selectedTicker" 
-                  @change="handleTickerChange"
-                  class="ticker-select"
-                  :disabled="isLoading"
+              <select 
+                v-model="selectedTicker" 
+                @change="handleTickerChange"
+                class="ticker-select"
+                :disabled="isLoading"
+              >
+                <option value="" disabled>Выберите тикер</option>
+                <option 
+                  v-for="ticker in availableTickers" 
+                  :key="ticker.ticker"
+                  :value="ticker.ticker"
                 >
-                  <option value="" disabled>Выберите тикер</option>
-                  <option 
-                    v-for="ticker in availableTickers" 
-                    :key="ticker.ticker"
-                    :value="ticker.ticker"
-                  >
-                    {{ ticker.ticker }}
-                  </option>
-                </select>
-              </div>
+                  {{ ticker.ticker }}
+                </option>
+              </select>
             </div>
 
             <!-- Период -->
@@ -50,103 +46,98 @@
                 <option :value="30">30 дней</option>
                 <option :value="60">60 дней</option>
                 <option :value="90">90 дней</option>
+                <option :value="180">180 дней</option>
+                <option :value="365">365 дней</option>
               </select>
             </div>
 
-            <!-- Действия -->
+            <!-- Кнопка обновления -->
             <div class="control-group">
-              <label class="control-label">Действия</label>
-              <div class="flex space-x-2">
-                <button 
-                  @click="handleRefresh"
-                  :disabled="isLoading"
-                  class="action-btn refresh"
-                >
-                  <span v-if="isLoading">🔄</span>
-                  <span v-else>🔄</span>
-                  Обновить
-                </button>
-              </div>
+              <label class="control-label">&nbsp;</label>
+              <button 
+                @click="handleRefresh"
+                :disabled="isLoading"
+                class="action-btn refresh w-full"
+              >
+                {{ isLoading ? '⏳ Загрузка...' : '🔄 Обновить' }}
+              </button>
             </div>
-          </div>
-
-          <!-- Ошибки -->
-          <div v-if="anyError" class="mt-4 error-message">
-            ⚠️ {{ anyError }}
-            <button @click="clearErrors" class="ml-2 underline">Скрыть</button>
           </div>
         </div>
       </div>
 
-      <!-- График -->
-      <div class="bg-trading-card rounded-lg border border-trading-border overflow-hidden">
-        <div class="p-4 border-b border-trading-border">
-          <h2 class="text-xl font-semibold">
-            {{ selectedTicker ? `${selectedTicker} - Чистый график` : 'Выберите тикер для просмотра' }}
-          </h2>
+      <!-- Информационные карточки -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-2xl font-bold text-blue-400">{{ selectedTicker || '—' }}</div>
+              <div class="text-sm text-gray-400">Тикер</div>
+            </div>
+            <div class="text-3xl">📊</div>
+          </div>
         </div>
         
-        <div class="p-4">
-          <!-- Реальный график БЕЗ сигналов -->
-          <CleanTradingChart
-            v-if="selectedTicker && candlesData.length > 0"
-            :ticker="selectedTicker"
-            :candles-data="formattedCandles"
-            :current-price="currentPrice"
-            :is-loading="isLoading"
-            :error="anyError"
-            :chart-days="chartDays"
-            @retry="handleRefresh"
-          />
-          
-          <!-- Загрузка -->
-          <div v-else-if="isLoading" class="text-center py-20">
-            <div class="animate-spin w-8 h-8 border-2 border-trading-green border-t-transparent rounded-full mx-auto mb-4"></div>
-            <div class="text-gray-400">Загрузка данных...</div>
-          </div>
-          
-          <!-- Нет тикера -->
-          <div v-else-if="!selectedTicker" class="text-center py-20 text-gray-400">
-            <div class="text-6xl mb-4">📈</div>
-            <div class="text-xl mb-2">Выберите инструмент</div>
-            <div class="text-sm">Выберите тикер из списка выше для просмотра графика</div>
-          </div>
-
-          <!-- Нет данных -->
-          <div v-else class="text-center py-20 text-gray-400">
-            <div class="text-6xl mb-4">📭</div>
-            <div class="text-xl mb-2">Нет данных</div>
-            <div class="text-sm">Для выбранного тикера нет данных за указанный период</div>
+        <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-2xl font-bold text-trading-green">{{ formatPrice(currentPrice) }}</div>
+              <div class="text-sm text-gray-400">Цена</div>
+            </div>
+            <div class="text-3xl">💰</div>
           </div>
         </div>
-      </div>
-
-      <!-- Дополнительная информация -->
-      <div v-if="selectedTicker && candlesData.length > 0" class="mt-6">
+        
         <div class="bg-trading-card rounded-lg border border-trading-border p-4">
-          <h3 class="text-lg font-semibold mb-3">📊 Статистика</h3>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+          <div class="flex items-center justify-between">
             <div>
-              <div class="text-2xl font-bold text-trading-green">{{ candlesData.length }}</div>
-              <div class="text-sm text-gray-400">Свечей</div>
-            </div>
-            <div v-if="currentPrice">
-              <div class="text-2xl font-bold text-white">{{ formatPrice(currentPrice) }}</div>
-              <div class="text-sm text-gray-400">Текущая цена</div>
-            </div>
-            <div v-if="priceChange">
               <div class="text-2xl font-bold" :class="priceChangeColor">
-                {{ priceChange > 0 ? '+' : '' }}{{ priceChange.toFixed(2) }}%
+                {{ priceChange ? (priceChange > 0 ? '+' : '') + priceChange.toFixed(2) + '%' : '—' }}
               </div>
               <div class="text-sm text-gray-400">Изменение</div>
             </div>
+            <div class="text-3xl">📈</div>
+          </div>
+        </div>
+
+        <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <div class="flex items-center justify-between">
             <div>
               <div class="text-2xl font-bold text-trading-yellow">{{ chartDays }}</div>
               <div class="text-sm text-gray-400">Дней</div>
             </div>
+            <div class="text-3xl">📅</div>
           </div>
         </div>
       </div>
+
+      <!-- Ошибки -->
+      <div v-if="anyError" class="mb-6">
+        <div class="error-message">
+          ❌ {{ anyError }}
+          <button 
+            @click="clearErrors" 
+            class="ml-4 underline hover:no-underline"
+          >
+            Скрыть
+          </button>
+        </div>
+      </div>
+
+      <!-- ЕДИНЫЙ ГРАФИК БЕЗ СИГНАЛОВ -->
+      <UnifiedTradingChart
+        :ticker="selectedTicker"
+        :candles-data="candlesData"
+        :signals-data="[]"
+        :show-signals="false"
+        :current-price="currentPrice"
+        :is-loading="isLoading"
+        :candles-error="candlesError"
+        :signals-error="null"
+        :chart-height="400"
+        @retry="handleRefresh"
+      />
+
     </div>
   </div>
 </template>
@@ -155,7 +146,7 @@
 import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTradingStore } from '../stores/tradingStore.js'
-import CleanTradingChart from '../components/charts/CleanTradingChart.vue'
+import UnifiedTradingChart from '../components/charts/UnifiedTradingChart.vue'
 
 // Router
 const route = useRoute()
@@ -184,6 +175,7 @@ const formattedCandles = computed(() => store.formattedCandles || [])
 const isLoading = computed(() => store.isLoading)
 
 // Errors
+const candlesError = computed(() => store.candlesError)
 const anyError = computed(() => {
   return store.candlesError || store.tickersError
 })
@@ -206,7 +198,7 @@ const priceChangeColor = computed(() => {
 // Methods
 async function handleTickerChange() {
   if (selectedTicker.value) {
-    console.log('🔄 Changing ticker to:', selectedTicker.value)
+    console.log('📄 Changing ticker to:', selectedTicker.value)
     await store.setTicker(selectedTicker.value)
     
     // Обновляем URL
