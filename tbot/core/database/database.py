@@ -1632,10 +1632,10 @@ class Database:
         """
         with self.session() as session:
             query = session.execute(
-                "SELECT id, channel_id, name, username, is_enabled, last_message_id, total_collected, created_at, updated_at "
-                "FROM telegram_channels "
-                + ("WHERE is_enabled = TRUE " if enabled_only else "")
-                + "ORDER BY name ASC"
+                text("SELECT id, channel_id, name, username, is_enabled, last_message_id, total_collected, created_at, updated_at "
+                     "FROM telegram_channels "
+                     + ("WHERE is_enabled = TRUE " if enabled_only else "")
+                     + "ORDER BY name ASC")
             )
 
             channels = []
@@ -1666,8 +1666,8 @@ class Database:
         """
         with self.session() as session:
             result = session.execute(
-                "SELECT id, channel_id, name, username, is_enabled, last_message_id, total_collected, created_at, updated_at "
-                "FROM telegram_channels WHERE channel_id = :channel_id",
+                text("SELECT id, channel_id, name, username, is_enabled, last_message_id, total_collected, created_at, updated_at "
+                     "FROM telegram_channels WHERE channel_id = :channel_id"),
                 {"channel_id": channel_id}
             ).fetchone()
 
@@ -1702,9 +1702,9 @@ class Database:
         with self.session() as session:
             try:
                 result = session.execute(
-                    "INSERT INTO telegram_channels (channel_id, name, username, is_enabled) "
-                    "VALUES (:channel_id, :name, :username, :is_enabled) "
-                    "RETURNING id",
+                    text("INSERT INTO telegram_channels (channel_id, name, username, is_enabled) "
+                         "VALUES (:channel_id, :name, :username, :is_enabled) "
+                         "RETURNING id"),
                     {
                         "channel_id": channel_id,
                         "name": name,
@@ -1720,7 +1720,7 @@ class Database:
             except IntegrityError:
                 session.rollback()
                 existing = session.execute(
-                    "SELECT id FROM telegram_channels WHERE channel_id = :channel_id",
+                    text("SELECT id FROM telegram_channels WHERE channel_id = :channel_id"),
                     {"channel_id": channel_id}
                 ).fetchone()
 
@@ -1751,7 +1751,7 @@ class Database:
             updates['channel_id'] = channel_id
 
             result = session.execute(
-                f"UPDATE telegram_channels SET {set_clause} WHERE channel_id = :channel_id",
+                text(f"UPDATE telegram_channels SET {set_clause} WHERE channel_id = :channel_id"),
                 updates
             )
             session.commit()
@@ -1773,7 +1773,7 @@ class Database:
         """
         with self.session() as session:
             result = session.execute(
-                "DELETE FROM telegram_channels WHERE channel_id = :channel_id",
+                text("DELETE FROM telegram_channels WHERE channel_id = :channel_id"),
                 {"channel_id": channel_id}
             )
             session.commit()
@@ -1796,8 +1796,8 @@ class Database:
         """
         with self.session() as session:
             result = session.execute(
-                "UPDATE telegram_channels SET total_collected = total_collected + :count "
-                "WHERE channel_id = :channel_id",
+                text("UPDATE telegram_channels SET total_collected = total_collected + :count "
+                     "WHERE channel_id = :channel_id"),
                 {"channel_id": channel_id, "count": count}
             )
             session.commit()
@@ -1816,8 +1816,8 @@ class Database:
         """
         with self.session() as session:
             result = session.execute(
-                "UPDATE telegram_channels SET last_message_id = :message_id "
-                "WHERE channel_id = :channel_id",
+                text("UPDATE telegram_channels SET last_message_id = :message_id "
+                     "WHERE channel_id = :channel_id"),
                 {"channel_id": channel_id, "message_id": message_id}
             )
             session.commit()
