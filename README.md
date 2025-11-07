@@ -1,16 +1,22 @@
-# .env (пример файла окружения)
-"""
+# Trader Tracker Bot v2
+
+Система для отслеживания и анализа торговых сигналов из Telegram каналов.
+
+## Конфигурация
+
+### .env файл (пример)
+
+```env
+# База данных
 DATABASE_URL=postgresql://postgres:password@localhost:5432/trader_tracker
 
-TINKOFF_TOKEN="t.SLRadtSMPRF5KnX0yNlPLx_RoUYsVhSIEbtXvVgiwFh_4HuI1F2whUj9gbTWBDqaQ6HdoTJWqkaT4MsGMqyuKg"
-TINKOFF_SANDBOX=true 
+# Tinkoff API
+TINKOFF_TOKEN="t.your_tinkoff_token_here"
+TINKOFF_SANDBOX=true
 
+# Telegram API credentials
 tg_api_id=21638473
 tg_api_hash=9f62f3896d254cf6bb5d39614709e7c3
-tg_phone="447778901975"
-tg_keyword="Sartoza77"
-target_channel_id = 2198949181
-test_channel_id = 2907147155
 
 # API настройки
 PORT=8000
@@ -27,11 +33,48 @@ LOG_LEVEL=INFO
 LOG_FILE=logs/trader_tracker.log
 
 VITE_API_URL=http://localhost:8000/api
+```
 
+## Управление Telegram каналами
 
+**Каналы управляются через БД и веб-интерфейс** (DataManagement.vue).
 
-# docker-compose.yml
-"""
+### Способы добавления каналов:
+
+#### 1. Через веб-интерфейс
+Откройте: `http://localhost:3000/data-management`
+
+Нажмите "➕ Добавить канал" и введите:
+- Channel ID (например: `-2198949181` или `-2907147155`)
+- Название канала
+- Включить мониторинг
+
+#### 2. Через API
+
+```bash
+# Добавить канал
+curl -X POST "http://localhost:8000/api/telegram/channels?channel_id=-2198949181&name=Main Trading Channel&enabled=true"
+
+# Получить список каналов
+curl "http://localhost:8000/api/telegram/channels"
+
+# Включить/выключить канал
+curl -X POST "http://localhost:8000/api/telegram/channel/-2198949181/enable"
+curl -X POST "http://localhost:8000/api/telegram/channel/-2198949181/disable"
+
+# Удалить канал
+curl -X DELETE "http://localhost:8000/api/telegram/channels/-2198949181"
+```
+
+### Важно о Channel ID:
+
+- Channel ID может быть **отрицательным числом** (для супергрупп/каналов)
+- Узнать channel_id можно через бота @userinfobot или @getidsbot
+- Примеры: `-2198949181`, `-2907147155`
+
+## docker-compose.yml
+
+```yaml
 version: '3.8'
 
 services:
@@ -79,10 +122,11 @@ services:
 volumes:
   postgres_data:
   redis_data:
-"""
+```
 
-# Dockerfile
-"""
+## Dockerfile
+
+```dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -108,4 +152,86 @@ ENV PYTHONPATH=/app
 
 # Команда запуска
 CMD ["python", "-m", "uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
-"""
+```
+
+## Запуск
+
+### Локально
+
+```bash
+# 1. Установить зависимости
+pip install -r requirements.txt
+
+# 2. Запустить PostgreSQL (через Docker)
+docker-compose up -d postgres
+
+# 3. Запустить API
+python -m uvicorn tbot.api.app:app --reload --host 0.0.0.0 --port 8000
+
+# 4. Запустить frontend (в отдельном терминале)
+cd frontend
+npm install
+npm run dev
+```
+
+### Docker
+
+```bash
+docker-compose up -d
+```
+
+## API Endpoints
+
+### Channels Management
+- `GET /api/telegram/channels` - список каналов
+- `POST /api/telegram/channels` - добавить канал
+- `PUT /api/telegram/channels/{channel_id}` - обновить канал
+- `DELETE /api/telegram/channels/{channel_id}` - удалить канал
+- `POST /api/telegram/channel/{channel_id}/enable` - включить
+- `POST /api/telegram/channel/{channel_id}/disable` - выключить
+
+### Monitoring
+- `POST /api/telegram/start` - запустить мониторинг
+- `POST /api/telegram/stop` - остановить мониторинг
+- `GET /api/telegram/status` - статус мониторинга
+
+### Messages & Signals
+- `GET /api/signals` - получить сигналы
+- `POST /api/messages/parse-all` - распарсить сообщения
+- `GET /api/messages/unparsed` - непарсированные сообщения
+
+## Структура проекта
+
+```
+tbot_v2/
+├── tbot/
+│   ├── api/
+│   │   └── app.py                    # FastAPI приложение
+│   ├── core/
+│   │   └── database/
+│   │       ├── models.py             # SQLAlchemy модели
+│   │       └── database.py           # Database класс
+│   ├── integrations/
+│   │   ├── telegram_scraper.py       # Telegram клиент
+│   │   └── tinkoff_integration.py    # Tinkoff API
+│   ├── analysis/
+│   │   ├── message_parser.py         # Парсинг сообщений
+│   │   └── signal_matcher.py         # Анализ сигналов
+│   └── config.py                     # Конфигурация
+├── frontend/
+│   └── src/
+│       ├── views/
+│       │   └── DataManagement.vue    # UI управления
+│       └── services/
+│           └── api.js                # API клиент
+└── README.md
+```
+
+## Особенности
+
+- ✅ Управление каналами через БД (без хардкода в .env)
+- ✅ Веб-интерфейс для управления
+- ✅ Автоматический парсинг сообщений
+- ✅ Real-time мониторинг каналов
+- ✅ Анализ торговых сигналов
+- ✅ Интеграция с Tinkoff API
