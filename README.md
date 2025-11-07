@@ -1,15 +1,16 @@
 # .env (пример файла окружения)
 """
-# База данных
 DATABASE_URL=postgresql://postgres:password@localhost:5432/trader_tracker
 
-# Tinkoff API
-TINKOFF_TOKEN=your_tinkoff_token_here
-TINKOFF_SANDBOX=false
+TINKOFF_TOKEN="t.SLRadtSMPRF5KnX0yNlPLx_RoUYsVhSIEbtXvVgiwFh_4HuI1F2whUj9gbTWBDqaQ6HdoTJWqkaT4MsGMqyuKg"
+TINKOFF_SANDBOX=true 
 
-# Telegram API
-TELEGRAM_API_ID=your_api_id
-TELEGRAM_API_HASH=your_api_hash
+tg_api_id=21638473
+tg_api_hash=9f62f3896d254cf6bb5d39614709e7c3
+tg_phone="447778901975"
+tg_keyword="Sartoza77"
+target_channel_id = 2198949181
+test_channel_id = 2907147155
 
 # API настройки
 PORT=8000
@@ -19,12 +20,15 @@ CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 # Функции
 ENABLE_TELEGRAM=true
 ENABLE_TINKOFF=true
-ENABLE_BG_TASKS=true
+ENABLE_BG_TASKS=false
 
 # Логирование
 LOG_LEVEL=INFO
 LOG_FILE=logs/trader_tracker.log
-"""
+
+VITE_API_URL=http://localhost:8000/api
+
+
 
 # docker-compose.yml
 """
