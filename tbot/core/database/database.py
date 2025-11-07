@@ -1107,11 +1107,15 @@ class Database:
                 for msg in messages
             ]
     
-    def mark_message_processed(self, message_id: int):
-        """Отметить сообщение как обработанное (legacy метод)"""
+    def mark_message_processed(self, message_id: int, parse_success: bool = None):
+        """Отметить сообщение как обработанное"""
         with self.session() as session:
+            update_data = {'is_processed': True}
+            if parse_success is not None:
+                update_data['parse_success'] = parse_success
+
             session.query(RawMessage).filter(RawMessage.id == message_id).update(
-                {'is_processed': True}
+                update_data
             )
     
     def get_trader_id_by_channel(self, channel_id: int) -> Optional[int]:
