@@ -560,6 +560,78 @@ export const tradingAPI = {
     } catch (error) {
       throw new Error('API health check failed')
     }
+  },
+
+  // Telegram Channel Management
+  async getTelegramChannels() {
+    try {
+      console.log('🌐 API: Getting Telegram channels')
+
+      const response = await api.get('/api/telegram/channels')
+
+      console.log('✅ API: Telegram channels response:', {
+        count: response.data.count
+      })
+
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Telegram channels error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to fetch Telegram channels')
+    }
+  },
+
+  async fetchLatestMessages(channelId, limit = 1000) {
+    // Validate channel ID before making the request
+    if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
+      console.error('❌ API: Invalid channel ID:', channelId)
+      throw new Error('Channel ID is required and must be a valid number')
+    }
+
+    try {
+      console.log(`🌐 API: Fetching latest ${limit} messages from channel ${channelId}`)
+
+      const response = await api.post(
+        `/api/telegram/channels/${channelId}/fetch-latest`,
+        null,
+        { params: { limit } }
+      )
+
+      console.log(`✅ API: Messages fetched for channel ${channelId}:`, response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Fetch messages error for channel ${channelId}:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || `Failed to fetch messages for channel ${channelId}`)
+    }
+  },
+
+  async addTelegramChannel(channelData) {
+    try {
+      const { channel_id, name, username, enabled = true } = channelData
+
+      if (!channel_id || !name) {
+        throw new Error('Channel ID and name are required')
+      }
+
+      console.log('🌐 API: Adding Telegram channel:', name)
+
+      const params = {
+        channel_id,
+        name,
+        enabled
+      }
+
+      if (username) {
+        params.username = username
+      }
+
+      const response = await api.post('/api/telegram/channels', null, { params })
+
+      console.log('✅ API: Telegram channel added:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Add Telegram channel error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to add Telegram channel')
+    }
   }
 }
 
