@@ -6,7 +6,7 @@ import logging
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from contextlib import contextmanager, asynccontextmanager
-
+from utils.datetime_utils import now_utc, utc_from_days_ago, ensure_timezone_aware
 from sqlalchemy import create_engine, func, and_, or_, desc, asc, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
@@ -551,25 +551,16 @@ class Database:
             }
     
     def _calculate_trader_stats(self, session: Session, trader_id: int, 
-                               from_date: Optional[datetime] = None) -> Dict:
-        """
-        Вспомогательный метод для расчета статистики трейдера
-        
-        Args:
-            session: сессия БД
-            trader_id: ID трейдера
-            from_date: начальная дата
-            
-        Returns:
-            Dict: статистика
-        """
-        # Базовый запрос сигналов
+                            from_date: Optional[datetime] = None) -> Dict:
+        # ДОБАВЬ ЭТИ ЛОГИ
         signals_query = session.query(ParsedSignal).filter(ParsedSignal.trader_id == trader_id)
         
         if from_date:
             signals_query = signals_query.filter(ParsedSignal.timestamp >= from_date)
         
         total_signals = signals_query.count()
+        
+        logger.info(f"🔍 _calculate_trader_stats: trader_id={trader_id}, from_date={from_date}, total_signals={total_signals}")
         
         # Статистика по результатам
         results_query = session.query(SignalResult).join(ParsedSignal).filter(
@@ -631,19 +622,20 @@ class Database:
 
     # ===== МЕТОДЫ ДЛЯ ТИКЕРОВ =====
     
-    def get_available_tickers(self, with_stats: bool = True) -> List[Dict]:
+    def get_available_tickers(self, with_stats: bool = True, include_candles_stats: bool = False) -> List[Dict]:
         """
         Получение списка доступных тикеров с статистикой
         
         Args:
-            with_stats: включить статистику по тикерам
+            with_stats: включить статистику по сигналам
+            include_candles_stats: включить статистику по свечам (медленная операция)
             
         Returns:
             List[Dict]: список тикеров
         """
         with self.session() as session:
             if with_stats:
-                # Запрос с агрегацией статистики
+                # Запрос с агрегацией статистики из сигналов
                 ticker_stats = session.query(
                     ParsedSignal.ticker,
                     func.count(ParsedSignal.id).label('signal_count'),
@@ -658,31 +650,53 @@ class Database:
                 
                 result = []
                 for ticker, count, last_signal, first_signal, unique_authors in ticker_stats:
-                    # ИСПРАВЛЕНИЕ: используем utcnow() с timezone для корректного вычисления дней
-                    days_active = 0
-                    if first_signal:
-                        from utils.datetime_utils import ensure_timezone_aware
-                        now_tz = ensure_timezone_aware(datetime.utcnow())
-                        first_signal_tz = ensure_timezone_aware(first_signal) if first_signal.tzinfo is None else first_signal
-                        days_active = (now_tz - first_signal_tz).days
-                    
-                    result.append({
+                    ticker_data = {
                         'ticker': ticker,
                         'signal_count': count,
-                        'last_signal': last_signal.isoformat() if last_signal else None,
-                        'first_signal': first_signal.isoformat() if first_signal else None,
-                        'unique_authors': unique_authors,
-                        'days_active': days_active
-                    })
+                        'last_signal': ensure_timezone_aware(last_signal).isoformat() if last_signal else None,
+                        'first_signal': ensure_timezone_aware(first_signal).isoformat() if first_signal else None,
+                        'unique_authors': unique_authors
+                    }
+                    
+                    # Добавляем информацию об инструменте и свечах только если запрошено
+                    if include_candles_stats:
+                        instrument = session.query(Instrument).filter(
+                            Instrument.ticker == ticker
+                        ).first()
+                        
+                        if instrument:
+                            ticker_data['name'] = instrument.name
+                            ticker_data['figi'] = instrument.figi
+                            
+                            # Считаем количество свечей
+                            candles_count = session.query(Candle).filter(
+                                Candle.instrument_id == instrument.figi
+                            ).count()
+                            
+                            ticker_data['candles_count'] = candles_count
+                            
+                            # Получаем последнюю свечу
+                            latest_candle_obj = session.query(Candle).filter(
+                                Candle.instrument_id == instrument.figi
+                            ).order_by(Candle.time.desc()).first()
+                            
+                            if latest_candle_obj:
+                                ticker_data['latest_candle'] = ensure_timezone_aware(latest_candle_obj.time).isoformat()
+                            else:
+                                ticker_data['latest_candle'] = None
+                        else:
+                            ticker_data['name'] = ticker
+                            ticker_data['figi'] = None
+                            ticker_data['candles_count'] = 0
+                            ticker_data['latest_candle'] = None
+                    
+                    result.append(ticker_data)
                 
                 return result
             else:
-                # Простой список тикеров
-                tickers = session.query(ParsedSignal.ticker).distinct().order_by(
-                    ParsedSignal.ticker
-                ).all()
-                
-                return [{'ticker': ticker[0]} for ticker in tickers]
+                # Простой список тикеров без статистики
+                tickers = session.query(ParsedSignal.ticker).distinct().all()
+                return [{'ticker': t[0]} for t in tickers]
 
     # ===== МЕТОДЫ ДЛЯ СООБЩЕНИЙ =====
     
@@ -711,12 +725,26 @@ class Database:
                     'timestamp': msg.timestamp.isoformat() if msg.timestamp else None,
                     'text': msg.text[:300] + "..." if len(msg.text) > 300 else msg.text,
                     'text_length': len(msg.text),
-                    'author': msg.author,
-                    'created_at': msg.created_at.isoformat() if msg.created_at else None
+                    # 'author': msg.author_username, тут нету автора по скольку мы его парсим уже на следующем шаге
+                    'collected_at': msg.collected_at.isoformat() if msg.collected_at else None
                 }
                 for msg in messages
             ]
     
+    def get_unparsed_messages_count(self) -> int:
+        """
+        Получение общего количества неразобранных сообщений
+        
+        Returns:
+            int: количество неразобранных сообщений
+        """
+        with self.session() as session:
+            count = session.query(RawMessage).filter(
+                RawMessage.is_processed == False
+            ).count()
+            
+            return count
+
     def get_raw_messages_sample(self, limit: int = 10) -> List[Dict]:
         """
         Получение образца сырых сообщений для отладки
@@ -739,7 +767,7 @@ class Database:
                     'message_id': msg.message_id,
                     'timestamp': msg.timestamp.isoformat() if msg.timestamp else None,
                     'text': msg.text[:200] + "..." if len(msg.text) > 200 else msg.text,
-                    'author': msg.author,
+                    'author': msg.author_username,
                     'is_processed': msg.is_processed
                 }
                 for msg in messages
@@ -944,15 +972,16 @@ class Database:
     def save_message(self, channel_id: int, message_id: int, 
                     timestamp: datetime, text: str, author: str = None,
                     is_processed: bool = False) -> int:
-        """Сохранить сырое сообщение из Telegram (legacy метод)"""
+        """Сохранить сырое сообщение из Telegram"""
         with self.session() as session:
+            # Создаем объект с минимальными данными
             message = RawMessage(
                 channel_id=channel_id,
                 message_id=message_id,
                 timestamp=timestamp,
                 text=text,
-                author=author,
                 is_processed=is_processed
+                # author_username можно не указывать - он nullable
             )
             
             try:
@@ -963,31 +992,58 @@ class Database:
                 
             except IntegrityError:
                 session.rollback()
-                # Сообщение уже существует - обновляем
+                # Дубликат - возвращаем существующий ID
                 existing = session.query(RawMessage).filter(
                     RawMessage.channel_id == channel_id,
                     RawMessage.message_id == message_id
                 ).first()
                 
                 if existing:
-                    existing.text = text
-                    existing.author = author
-                    existing.is_processed = is_processed
-                    session.flush()
+                    # Опционально: обновляем текст если изменился
+                    if existing.text != text:
+                        existing.text = text
+                        existing.is_processed = False  # Переразобрать
+                        session.flush()
                     return existing.id
                 
                 raise
-    
+
     def save_signal(self, signal_data: Dict) -> str:
-        """Сохранить торговый сигнал (legacy метод)"""
+        """Сохранить торговый сигнал с автоматическим определением trader_id"""
         with self.session() as session:
+            trader_id = signal_data.get('trader_id')
+            
+            if not trader_id:
+                author = signal_data.get('author')
+                channel_id = signal_data.get('channel_id')
+                
+                if author:
+                    trader = session.query(Trader).filter(
+                        Trader.name == author,
+                        Trader.is_active == True
+                    ).first()
+                    
+                    if trader:
+                        trader_id = trader.id
+                        logger.debug(f"Auto-assigned trader_id={trader_id} by author={author}")
+                
+                if not trader_id and channel_id:
+                    trader = session.query(Trader).filter(
+                        Trader.channel_id == channel_id,
+                        Trader.is_active == True
+                    ).first()
+                    
+                    if trader:
+                        trader_id = trader.id
+                        logger.debug(f"Auto-assigned trader_id={trader_id} by channel_id={channel_id}")
+            
             signal = ParsedSignal(
                 raw_message_id=signal_data.get('raw_message_id'),
                 timestamp=signal_data['timestamp'],
                 parser_version=signal_data.get('parser_version', '1.0'),
                 confidence_score=signal_data.get('confidence_score'),
                 channel_id=signal_data['channel_id'],
-                trader_id=signal_data.get('trader_id'),
+                trader_id=trader_id,
                 author=signal_data.get('author'),
                 original_text=signal_data['original_text'],
                 ticker=signal_data['ticker'],
@@ -1006,9 +1062,9 @@ class Database:
             session.add(signal)
             session.flush()
             
-            logger.debug(f"Signal saved: {signal.id}")
+            logger.debug(f"Signal saved: {signal.id}, trader_id={trader_id}, author={signal_data.get('author')}")
             return str(signal.id)
-    
+
     def get_signals(self, ticker: str = None, trader_id: int = None,
                    channel_id: int = None, direction: str = None,
                    from_date: datetime = None, limit: int = 100) -> List[Dict]:
@@ -1045,7 +1101,7 @@ class Database:
                     'message_id': msg.message_id,
                     'timestamp': msg.timestamp,
                     'text': msg.text,
-                    'author': msg.author,
+                    'author': msg.author_username,
                     'is_processed': msg.is_processed
                 }
                 for msg in messages
@@ -1058,31 +1114,19 @@ class Database:
                 {'is_processed': True}
             )
     
+    def get_trader_id_by_channel(self, channel_id: int) -> Optional[int]:
+        with self.session() as session:
+            trader = session.query(Trader).filter(
+                Trader.channel_id == channel_id,
+                Trader.is_active == True
+            ).first()
+            
+            return trader.id if trader else None
+
     def get_all_traders(self, active_only: bool = True) -> List[Dict]:
         """Получить список всех трейдеров (legacy метод, перенаправляет на новый)"""
         return self.get_traders(include_stats=False, active_only=active_only)
-    
-    def get_trader_stats(self, trader_id: int) -> Optional[Dict]:
-        """Получить статистику трейдера (legacy метод, перенаправляет на новый)"""
-        trader_info = self.get_trader_by_id(trader_id)
-        if not trader_info:
-            return None
-        
-        return {
-            'trader_id': trader_info['id'],
-            'name': trader_info['name'],
-            'telegram_username': trader_info['telegram_username'],
-            'channel_id': trader_info['channel_id'],
-            'is_active': trader_info['is_active'],
-            'total_signals': trader_info.get('live_stats', {}).get('total_signals', 0),
-            'total_results': trader_info.get('live_stats', {}).get('total_results', 0),
-            'closed_results': trader_info.get('live_stats', {}).get('closed_results', 0),
-            'win_rate': trader_info.get('live_stats', {}).get('win_rate', 0),
-            'avg_profit_pct': trader_info.get('live_stats', {}).get('avg_profit_pct', 0),
-            'first_signal_at': trader_info['first_signal_at'],
-            'last_signal_at': trader_info['last_signal_at']
-        }
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Получить общую статистику системы (legacy метод, перенаправляет на новый)"""
         return self.get_system_statistics()
@@ -1285,6 +1329,11 @@ class Database:
                     return existing.id
                 raise
     
+    def get_total_messages_count(self) -> int:
+        """Получить общее количество сырых сообщений"""
+        with self.session() as session:
+            return session.query(RawMessage).count()
+
     def save_signal_result(self, signal_id: str, result_data: Dict) -> str:
         """Сохранить результат отслеживания сигнала"""
         with self.session() as session:
@@ -1570,3 +1619,207 @@ class Database:
             List[Dict]: список паттернов
         """
         return self.get_all_patterns(category=category, active_only=active_only)
+
+def get_channels(self, enabled_only: bool = False) -> List[Dict]:
+    """
+    Получить список всех Telegram каналов
+    
+    Args:
+        enabled_only: вернуть только включенные каналы
+        
+    Returns:
+        List[Dict]: список каналов
+    """
+    with self.session() as session:
+        query = session.execute(
+            "SELECT id, channel_id, name, username, is_enabled, last_message_id, total_collected, created_at, updated_at "
+            "FROM telegram_channels "
+            + ("WHERE is_enabled = TRUE " if enabled_only else "")
+            + "ORDER BY name ASC"
+        )
+        
+        channels = []
+        for row in query:
+            channels.append({
+                'id': row[0],
+                'channel_id': row[1],
+                'name': row[2],
+                'username': row[3],
+                'is_enabled': row[4],
+                'last_message_id': row[5],
+                'total_collected': row[6],
+                'created_at': row[7].isoformat() if row[7] else None,
+                'updated_at': row[8].isoformat() if row[8] else None
+            })
+        
+        return channels
+
+def get_channel_by_id(self, channel_id: int) -> Optional[Dict]:
+    """
+    Получить канал по его Telegram ID
+    
+    Args:
+        channel_id: ID канала в Telegram
+        
+    Returns:
+        Dict: данные канала или None
+    """
+    with self.session() as session:
+        result = session.execute(
+            "SELECT id, channel_id, name, username, is_enabled, last_message_id, total_collected, created_at, updated_at "
+            "FROM telegram_channels WHERE channel_id = :channel_id",
+            {"channel_id": channel_id}
+        ).fetchone()
+        
+        if not result:
+            return None
+        
+        return {
+            'id': result[0],
+            'channel_id': result[1],
+            'name': result[2],
+            'username': result[3],
+            'is_enabled': result[4],
+            'last_message_id': result[5],
+            'total_collected': result[6],
+            'created_at': result[7].isoformat() if result[7] else None,
+            'updated_at': result[8].isoformat() if result[8] else None
+        }
+
+def create_channel(self, channel_id: int, name: str, username: str = None, is_enabled: bool = True) -> int:
+    """
+    Создать новый Telegram канал
+    
+    Args:
+        channel_id: ID канала в Telegram
+        name: название канала
+        username: username канала (@channel)
+        is_enabled: включен ли канал
+        
+    Returns:
+        int: ID созданной записи
+    """
+    with self.session() as session:
+        try:
+            result = session.execute(
+                "INSERT INTO telegram_channels (channel_id, name, username, is_enabled) "
+                "VALUES (:channel_id, :name, :username, :is_enabled) "
+                "RETURNING id",
+                {
+                    "channel_id": channel_id,
+                    "name": name,
+                    "username": username,
+                    "is_enabled": is_enabled
+                }
+            )
+            session.commit()
+            record_id = result.fetchone()[0]
+            logger.info(f"Channel created: {name} (ID: {record_id}, channel_id: {channel_id})")
+            return record_id
+            
+        except IntegrityError:
+            session.rollback()
+            existing = session.execute(
+                "SELECT id FROM telegram_channels WHERE channel_id = :channel_id",
+                {"channel_id": channel_id}
+            ).fetchone()
+            
+            if existing:
+                logger.warning(f"Channel already exists: {name} (channel_id: {channel_id})")
+                return existing[0]
+            raise
+
+def update_channel(self, channel_id: int, **kwargs) -> bool:
+    """
+    Обновить данные канала
+    
+    Args:
+        channel_id: ID канала в Telegram
+        **kwargs: поля для обновления (name, username, is_enabled, last_message_id, total_collected)
+        
+    Returns:
+        bool: успешность операции
+    """
+    with self.session() as session:
+        allowed_fields = ['name', 'username', 'is_enabled', 'last_message_id', 'total_collected']
+        updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
+        
+        if not updates:
+            return False
+        
+        set_clause = ", ".join([f"{k} = :{k}" for k in updates.keys()])
+        updates['channel_id'] = channel_id
+        
+        result = session.execute(
+            f"UPDATE telegram_channels SET {set_clause} WHERE channel_id = :channel_id",
+            updates
+        )
+        session.commit()
+        
+        if result.rowcount > 0:
+            logger.info(f"Channel updated: channel_id={channel_id}, fields={list(updates.keys())}")
+            return True
+        return False
+
+def delete_channel(self, channel_id: int) -> bool:
+    """
+    Удалить канал
+    
+    Args:
+        channel_id: ID канала в Telegram
+        
+    Returns:
+        bool: успешность операции
+    """
+    with self.session() as session:
+        result = session.execute(
+            "DELETE FROM telegram_channels WHERE channel_id = :channel_id",
+            {"channel_id": channel_id}
+        )
+        session.commit()
+        
+        if result.rowcount > 0:
+            logger.info(f"Channel deleted: channel_id={channel_id}")
+            return True
+        return False
+
+def increment_channel_messages(self, channel_id: int, count: int = 1) -> bool:
+    """
+    Увеличить счетчик собранных сообщений
+    
+    Args:
+        channel_id: ID канала в Telegram
+        count: количество для добавления
+        
+    Returns:
+        bool: успешность операции
+    """
+    with self.session() as session:
+        result = session.execute(
+            "UPDATE telegram_channels SET total_collected = total_collected + :count "
+            "WHERE channel_id = :channel_id",
+            {"channel_id": channel_id, "count": count}
+        )
+        session.commit()
+        return result.rowcount > 0
+
+def update_channel_last_message(self, channel_id: int, message_id: int) -> bool:
+    """
+    Обновить ID последнего сообщения канала
+    
+    Args:
+        channel_id: ID канала в Telegram
+        message_id: ID последнего сообщения
+        
+    Returns:
+        bool: успешность операции
+    """
+    with self.session() as session:
+        result = session.execute(
+            "UPDATE telegram_channels SET last_message_id = :message_id "
+            "WHERE channel_id = :channel_id",
+            {"channel_id": channel_id, "message_id": message_id}
+        )
+        session.commit()
+        return result.rowcount > 0
+

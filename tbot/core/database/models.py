@@ -56,8 +56,9 @@ class RawMessage(Base):
     
     # Статус обработки
     is_processed = Column(Boolean, default=False)
+    parse_success = Column(Boolean, nullable=True)  # True = успешно, False = failed, NULL = не обработано
     processing_attempts = Column(Integer, default=0)
-    
+        
     # Relationships - ТОЛЬКО с parsed_signals
     parsed_signals = relationship("ParsedSignal", back_populates="raw_message")
     
@@ -257,7 +258,88 @@ class Candle(Base):
         Index('idx_candles_interval_time', 'interval', 'time'),
     )
 
-# ===== DATACLASSES FOR API RESPONSES =====
+class ConsensusEvent(Base):
+    """События консенсуса трейдеров"""
+    __tablename__ = 'consensus_events'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Основные параметры
+    ticker = Column(String(10), nullable=False, index=True)
+    direction = Column(String(10), nullable=False)  # long, short
+    
+    # Параметры консенсуса
+    traders_count = Column(Integer, nullable=False)  # Количество уникальных трейдеров
+    window_minutes = Column(Integer, nullable=False)  # Размер окна в минутах
+    
+    # Временные метки
+    first_signal_at = Column(DateTime(timezone=True), nullable=False)
+    last_signal_at = Column(DateTime(timezone=True), nullable=False)
+    detected_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Ценовые данные
+    avg_entry_price = Column(Numeric(12, 4))
+    min_entry_price = Column(Numeric(12, 4))
+    max_entry_price = Column(Numeric(12, 4))
+    price_spread_pct = Column(Numeric(8, 4))  # Разброс цен в %
+    
+    # Статус
+    status = Column(String(20), default='active')  # active, closed, expired
+    
+    # Метаданные
+    consensus_strength = Column(Integer)  # Оценка силы консенсуса 0-100
+    consensus_metadata = Column(JSONB)
+    
+    # Relationships
+    signals = relationship("ConsensusSignal", back_populates="consensus")
+    
+    __table_args__ = (
+        Index('idx_consensus_ticker_detected', 'ticker', 'detected_at'),
+        Index('idx_consensus_status', 'status'),
+        Index('idx_consensus_strength', 'consensus_strength'),
+    )
+
+class ConsensusSignal(Base):
+    """Связь сигналов с консенсусом"""
+    __tablename__ = 'consensus_signals'
+    
+    id = Column(Integer, primary_key=True)
+    consensus_id = Column(UUID(as_uuid=True), ForeignKey('consensus_events.id'), nullable=False)
+    signal_id = Column(UUID(as_uuid=True), ForeignKey('parsed_signals.id'), nullable=False)
+    
+    # Метаданные
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_initiator = Column(Boolean, default=False)  # Был ли этот сигнал инициатором консенсуса
+    
+    # Relationships
+    consensus = relationship("ConsensusEvent", back_populates="signals")
+    signal = relationship("ParsedSignal")
+    
+    __table_args__ = (
+        UniqueConstraint('consensus_id', 'signal_id', name='unique_consensus_signal'),
+        Index('idx_consensus_signals_consensus', 'consensus_id'),
+        Index('idx_consensus_signals_signal', 'signal_id'),
+    )
+
+class TelegramChannel(Base):
+    """Telegram каналы для мониторинга"""
+    __tablename__ = 'telegram_channels'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    channel_id = Column(BigInteger, unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    username = Column(String(255))
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    last_message_id = Column(BigInteger)
+    total_collected = Column(Integer, default=0, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_telegram_channels_channel_id', 'channel_id'),
+        Index('idx_telegram_channels_is_enabled', 'is_enabled'),
+    )
 
 @dataclass
 class TraderStatsResponse:

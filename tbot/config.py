@@ -24,9 +24,9 @@ class TinkoffConfig:
 @dataclass
 class TelegramConfig:
     """Конфигурация Telegram"""
-    api_id: int = int(os.getenv("TELEGRAM_API_ID", "0"))
-    api_hash: str = os.getenv("TELEGRAM_API_HASH", "")
-    session_name: str = os.getenv("TELEGRAM_SESSION", "demo_session")
+    api_id: int = int(os.getenv("tg_api_id", "0"))
+    api_hash: str = os.getenv("tg_api_hash", "")
+    session_name: str = os.getenv("TELEGRAM_SESSION", "trader_session")
 
 @dataclass
 class TrackingConfig:

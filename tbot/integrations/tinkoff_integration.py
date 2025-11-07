@@ -73,7 +73,9 @@ class TinkoffIntegration:
             try:
                 logger.info(f"🔍 Searching for instrument: {ticker}")
                 
-                # Используем старый подход
+                ticker_upper = ticker.upper()
+                found_instruments = []
+                
                 instrument_types = [
                     ("shares", client.instruments.shares),
                     ("etfs", client.instruments.etfs),
@@ -85,8 +87,11 @@ class TinkoffIntegration:
                 for type_name, instrument_method in instrument_types:
                     try:
                         response = await instrument_method()
+                        
                         for instrument in response.instruments:
-                            if instrument.ticker.upper() == ticker.upper():
+                            instrument_ticker_upper = instrument.ticker.upper()
+                            
+                            if instrument_ticker_upper == ticker_upper:
                                 result = {
                                     "figi": instrument.figi,
                                     "ticker": instrument.ticker,
@@ -96,11 +101,31 @@ class TinkoffIntegration:
                                     "lot": instrument.lot,
                                     "trading_status": str(instrument.trading_status) if hasattr(instrument, 'trading_status') else 'unknown'
                                 }
-                                logger.info(f"✅ Found {ticker}: {result['name']} ({result['figi']})")
+                                logger.info(f"✅ Found exact match {ticker}: {result['name']} ({result['figi']})")
                                 return result
+                            
+                            elif instrument_ticker_upper.startswith(ticker_upper):
+                                found_instruments.append({
+                                    "figi": instrument.figi,
+                                    "ticker": instrument.ticker,
+                                    "name": instrument.name,
+                                    "type": type_name,
+                                    "currency": instrument.currency,
+                                    "lot": instrument.lot,
+                                    "trading_status": str(instrument.trading_status) if hasattr(instrument, 'trading_status') else 'unknown'
+                                })
+                                
                     except Exception as e:
                         logger.warning(f"⚠️ Error searching in {type_name}: {e}")
                         continue
+                
+                if found_instruments:
+                    logger.info(f"🔎 Found {len(found_instruments)} partial matches for '{ticker}':")
+                    for idx, inst in enumerate(found_instruments[:5]):
+                        logger.info(f"  {idx+1}. {inst['ticker']} - {inst['name']} ({inst['type']})")
+                    
+                    logger.info(f"✅ Returning first match: {found_instruments[0]['ticker']}")
+                    return found_instruments[0]
                 
                 logger.warning(f"❌ Instrument {ticker} not found")
                 return None

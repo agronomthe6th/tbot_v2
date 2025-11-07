@@ -1,7 +1,3 @@
-"""
-Message Parser - парсинг торговых сигналов из текстовых сообщений
-Версия 3.0 с поддержкой паттернов из БД
-"""
 import re
 import logging
 from datetime import datetime
@@ -24,7 +20,7 @@ class ParseResult:
 class MessageParser:
     """Парсер торговых сигналов с поддержкой паттернов из БД"""
     
-    VERSION = "3.0.0"
+    VERSION = "3.1.0"
     
     def __init__(self, db_manager=None):
         """
@@ -65,8 +61,15 @@ class MessageParser:
             if not text or not text.strip():
                 return ParseResult(success=False, error="Empty message text")
             
-            cleaned_text = self._clean_message_text(text)
-            logger.debug(f"Cleaned text: {cleaned_text}")
+            logger.debug(f"📝 Parsing message {raw_message.get('id')}")
+            logger.debug(f"Original text: {text[:200]}")
+            
+            # ИЗВЛЕКАЕМ АВТОРА ИЗ ОРИГИНАЛЬНОГО ТЕКСТА (ДО ОЧИСТКИ!)
+            author = self._extract_author(text, raw_message.get('author_username'))
+            logger.debug(f"👤 Extracted author: {author}")
+            
+            # Базовая очистка без удаления хештегов
+            cleaned_text = text.strip()
             
             if not self._is_trading_message(cleaned_text):
                 return ParseResult(success=False, error="Not a trading message")
@@ -77,7 +80,6 @@ class MessageParser:
             
             operation_type, direction = self._analyze_operation(cleaned_text)
             
-            author = self._extract_author(cleaned_text, raw_message.get('author_username'))
             prices = self._extract_prices(cleaned_text)
             confidence = self._calculate_confidence(cleaned_text, ticker, direction, operation_type)
             
@@ -105,17 +107,19 @@ class MessageParser:
             }
             
             logger.info(f"✅ Parsed message {raw_message['id']}: "
-                       f"ticker={ticker}, direction={direction}, operation={operation_type}, confidence={confidence}")
+                       f"ticker={ticker}, direction={direction}, operation={operation_type}, "
+                       f"author={author}, confidence={confidence}")
             
             return ParseResult(success=True, signal_data=signal_data, confidence=confidence)
             
         except Exception as e:
-            logger.error(f"❌ Error parsing message {raw_message.get('id')}: {e}")
+            logger.error(f"❌ Error parsing message {raw_message.get('id')}: {e}", exc_info=True)
             return ParseResult(success=False, error=f"Exception: {str(e)}")
     
     def _clean_message_text(self, text: str) -> str:
         """
         Очистка мусора из сообщения
+        ВРЕМЕННО ОТКЛЮЧЕНА для отладки
         
         Args:
             text: исходный текст
@@ -128,10 +132,10 @@ class MessageParser:
         
         cleaned = text
         
-        garbage_patterns = self.pattern_manager.get_patterns('garbage')
-        
-        for pattern in garbage_patterns:
-            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        # Закомментировано для отладки
+        # garbage_patterns = self.pattern_manager.get_patterns('garbage')
+        # for pattern in garbage_patterns:
+        #     cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
         
         cleaned = re.sub(r'\n\s*\n', '\n', cleaned)
         cleaned = cleaned.strip()
@@ -154,10 +158,10 @@ class MessageParser:
         trading_keywords = self.pattern_manager.get_patterns('trading_keyword')
         ticker_patterns = self.pattern_manager.get_patterns('ticker')
         
-        has_keywords = any(re.search(pattern, text) for pattern in trading_keywords)
+        has_keywords = any(re.search(pattern, text, re.IGNORECASE) for pattern in trading_keywords)
         has_ticker = any(re.search(pattern, text) for pattern in ticker_patterns)
         
-        trading_emojis = ['🃏', '🎪', '📈', '📉', '⭐']
+        trading_emojis = ['🔥', '🎪', '📈', '📉', '⭐']
         has_emoji = any(emoji in text for emoji in trading_emojis)
         
         result = has_keywords or has_ticker or has_emoji
@@ -186,6 +190,7 @@ class MessageParser:
             match = re.search(pattern, text)
             if match:
                 ticker = match.group(1).upper()
+                logger.debug(f"Found ticker: {ticker} with pattern: {pattern}")
                 return ticker
         
         return None
@@ -234,7 +239,7 @@ class MessageParser:
         exit_patterns = self.pattern_manager.get_patterns('operation_exit')
         
         for pattern in exit_patterns:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 logger.debug(f"Found exit pattern: {pattern} -> {match.group()}")
                 
@@ -249,12 +254,12 @@ class MessageParser:
         short_patterns = self.pattern_manager.get_patterns('direction_short')
         
         for pattern in long_patterns:
-            if re.search(pattern, text):
+            if re.search(pattern, text, re.IGNORECASE):
                 logger.debug(f"Found long entry pattern: {pattern}")
                 return 'entry', 'long'
         
         for pattern in short_patterns:
-            if re.search(pattern, text):
+            if re.search(pattern, text, re.IGNORECASE):
                 logger.debug(f"Found short entry pattern: {pattern}")
                 return 'entry', 'short'
         
@@ -320,15 +325,34 @@ class MessageParser:
             str: имя автора
         """
         if not self.pattern_manager:
+            logger.warning("⚠️ No pattern_manager in _extract_author")
             return fallback or 'Unknown'
         
         author_patterns = self.pattern_manager.get_patterns('author')
         
-        for pattern in author_patterns:
-            match = re.search(pattern, text)
-            if match:
-                return match.group(1)
+        logger.debug(f"🔍 Author patterns count: {len(author_patterns)}")
+        logger.debug(f"🔍 Text to search (first 150 chars): {text[:150]}")
         
+        for i, pattern in enumerate(author_patterns):
+            logger.debug(f"🔍 Testing author pattern #{i+1}: {pattern}")
+            try:
+                match = re.search(pattern, text)
+                if match:
+                    # Пытаемся взять первую группу, если есть
+                    if match.groups():
+                        author = match.group(1)
+                    else:
+                        author = match.group()
+                    
+                    logger.info(f"✅ Found author: '{author}' with pattern: {pattern}")
+                    return author
+                else:
+                    logger.debug(f"❌ Pattern #{i+1} did not match")
+            except Exception as e:
+                logger.error(f"❌ Error testing pattern {pattern}: {e}")
+                continue
+        
+        logger.warning(f"⚠️ No author found in text, using fallback: {fallback or 'Unknown'}")
         return fallback or 'Unknown'
     
     def _extract_prices(self, text: str) -> Dict[str, Optional[float]]:
@@ -433,18 +457,32 @@ class MessageParsingService:
         self.db = db_manager
         self.parser = parser or MessageParser(db_manager)
     
-    def parse_all_unprocessed_messages(self, limit: Optional[int] = None) -> Dict:
+    def parse_message(self, message: Dict) -> ParseResult:
         """
-        Обработка всех необработанных сообщений
+        Парсинг одного сообщения
         
         Args:
-            limit: максимальное количество сообщений
+            message: данные сообщения
             
         Returns:
-            Dict: статистика обработки
+            ParseResult: результат парсинга
         """
+        return self.parser.parse_raw_message(message)
+
+    def parse_all_unprocessed_messages(self, limit: Optional[int] = None) -> Dict:
         try:
             unprocessed = self._get_unprocessed_messages(limit)
+            
+            if not unprocessed:
+                logger.info("No unprocessed messages found")
+                return {
+                    'total_processed': 0,
+                    'successful_parses': 0,
+                    'failed_parses': 0,
+                    'trading_messages': 0,
+                    'non_trading_messages': 0,
+                    'errors': []
+                }
             
             stats = {
                 'total_processed': 0,
@@ -468,8 +506,10 @@ class MessageParsingService:
                         if signal_id:
                             stats['successful_parses'] += 1
                             stats['trading_messages'] += 1
+                            self.db.mark_message_processed(message['id'], parse_success=True)
                         else:
                             stats['failed_parses'] += 1
+                            self.db.mark_message_processed(message['id'], parse_success=False)
                     else:
                         stats['failed_parses'] += 1
                         if result.error != "Not a trading message":
@@ -479,8 +519,8 @@ class MessageParsingService:
                             })
                         else:
                             stats['non_trading_messages'] += 1
-                    
-                    self.db.mark_message_as_processed(message['id'])
+                        
+                        self.db.mark_message_processed(message['id'], parse_success=False)
                     
                 except Exception as e:
                     logger.error(f"Error processing message {message.get('id')}: {e}")
@@ -488,9 +528,10 @@ class MessageParsingService:
                         'message_id': message.get('id'),
                         'error': str(e)
                     })
+                    self.db.mark_message_processed(message.get('id'), parse_success=False)
             
             logger.info(f"Parsing completed: {stats['successful_parses']} successful, "
-                       f"{stats['failed_parses']} failed")
+                    f"{stats['failed_parses']} failed")
             
             return stats
             
@@ -502,7 +543,7 @@ class MessageParsingService:
                 'failed_parses': 0,
                 'errors': [{'error': str(e)}]
             }
-    
+
     def _get_unprocessed_messages(self, limit: Optional[int]) -> List[Dict]:
         """Получение необработанных сообщений из БД"""
         messages = self.db.get_unparsed_messages(limit=limit or 100)
