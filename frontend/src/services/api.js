@@ -243,6 +243,94 @@ export const tradingAPI = {
     }
   },
 
+  // ===== 🔥 CONSENSUS METHODS =====
+  async getConsensusEvents(options = {}) {
+    try {
+      const {
+        ticker,
+        direction,
+        status = 'all',
+        min_strength,
+        days_back = 30,
+        limit = 50,
+        offset = 0
+      } = options
+
+      console.log('🌐 API: Getting consensus events with:', options)
+
+      const params = {
+        status,
+        days_back,
+        limit,
+        offset
+      }
+
+      if (ticker) params.ticker = ticker
+      if (direction) params.direction = direction
+      if (min_strength !== undefined) params.min_strength = min_strength
+
+      const response = await api.get('/api/consensus', { params })
+
+      console.log('✅ API: Consensus events response:', {
+        count: response.data.count,
+        events: response.data.consensus_events?.length
+      })
+
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Consensus events error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to fetch consensus events')
+    }
+  },
+
+  async getConsensusDetails(consensus_id) {
+    try {
+      console.log(`🌐 API: Getting consensus details for ${consensus_id}`)
+      
+      const response = await api.get(`/api/consensus/${consensus_id}`)
+      
+      console.log('✅ API: Consensus details response:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Consensus details error for ${consensus_id}:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || `Failed to fetch consensus ${consensus_id}`)
+    }
+  },
+
+  async getConsensusStats(ticker = null, days_back = 30) {
+    try {
+      console.log(`🌐 API: Getting consensus stats (ticker: ${ticker}, days: ${days_back})`)
+      
+      const params = { days_back }
+      if (ticker) params.ticker = ticker
+      
+      const response = await api.get('/api/consensus/stats', { params })
+      
+      console.log('✅ API: Consensus stats response:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Consensus stats error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to fetch consensus statistics')
+    }
+  },
+
+  async triggerConsensusDetection(ticker = null, hours_back = 24) {
+    try {
+      console.log(`🌐 API: Triggering consensus detection (ticker: ${ticker}, hours: ${hours_back})`)
+      
+      const params = { hours_back }
+      if (ticker) params.ticker = ticker
+      
+      const response = await api.post('/api/consensus/detect', null, { params })
+      
+      console.log('✅ API: Consensus detection triggered:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Consensus detection error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to trigger consensus detection')
+    }
+  },
+
   async getPattern(pattern_id) {
     try {
       console.log(`🌐 API: Getting pattern ${pattern_id}`)
@@ -327,12 +415,15 @@ export const tradingAPI = {
     }
   },
 
-  async getAvailableTickers(with_stats = true) {
+  async getAvailableTickers(with_stats = true, include_candles_stats = false) {
     try {
       console.log('🌐 API: Getting available tickers')
       
       const response = await api.get('/api/tickers', {
-        params: { with_stats }
+        params: { 
+          with_stats,
+          include_candles_stats
+        }
       })
       
       console.log('✅ API: Tickers response:', {
@@ -346,16 +437,17 @@ export const tradingAPI = {
     }
   },
 
-  async getCandles(ticker, days = 30) {
+  async getCandles(ticker, days, interval = '5min') {
     try {
-      console.log(`🌐 API: Getting candles for ${ticker}, ${days} days`)
+      console.log(`🌕 API: Getting candles for ${ticker}, ${days} days, interval: ${interval}`)
       
       const response = await api.get(`/api/candles/${ticker}`, {
-        params: { days }
+        params: { days, interval }
       })
       
       console.log('✅ API: Candles response:', {
         ticker: response.data.ticker,
+        interval: response.data.interval,
         count: response.data.count,
         period_days: response.data.period_days
       })
@@ -364,10 +456,54 @@ export const tradingAPI = {
     } catch (error) {
       console.error(`❌ API: Candles error for ${ticker}:`, error.response?.data)
       if (error.response?.status === 404) {
-        throw new Error(`No candle data available for ${ticker}. Try loading historical data first.`)
+        throw new Error(`No candle data available for ${ticker}`)
       }
       throw new Error(error.response?.data?.detail || `Failed to fetch candles for ${ticker}`)
     }
+  },
+
+  async testPatternOnMessages(pattern_id, limit = 1000) {
+    try {
+      console.log(`🌐 API: Testing pattern ${pattern_id} on real messages`)
+      
+      const response = await api.post(`/api/patterns/${pattern_id}/test-on-messages`, null, {
+        params: { limit }
+      })
+      
+      console.log('✅ API: Pattern test on messages result:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Test pattern on messages error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to test pattern on messages')
+    }
+  },
+
+  async reparseAllMessages(force = false) {
+    try {
+      console.log('🌐 API: Starting full reparse, force:', force)
+      
+      const response = await api.post('/api/messages/reparse-all', null, {
+        params: { force }
+      })
+      
+      console.log('✅ API: Reparse started:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Reparse error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to start reparse')
+    }
+  },
+
+  async getFailedMessages(limit = 50, offset = 0) {
+    const response = await api.get('/api/messages/failed', {
+      params: { limit, offset }
+    })
+    return response.data
+  },
+
+  async getSignalStats() {
+    const response = await api.get('/api/signals/stats')
+    return response.data
   },
 
   async getCurrentPrice(ticker) {
@@ -418,21 +554,17 @@ export const tradingAPI = {
     }
   },
 
-  async loadHistoricalData(ticker, options = {}) {
+  async loadHistoricalData(ticker, days_back = 365, force_reload = false) {
     try {
-      const {
-        days_back = 365,
-        force_reload = false
-      } = options
-
       console.log(`🌐 API: Loading historical data for ${ticker}`, { days_back, force_reload })
 
       const params = {
+        ticker: ticker,
         days_back,
         force_reload
       }
 
-      const response = await api.post(`/api/data/load/${ticker}`, null, { params })
+      const response = await api.post(`/api/data/load`, null, { params })
 
       console.log(`✅ API: Historical data loaded for ${ticker}:`, response.data)
       return response.data
@@ -560,7 +692,121 @@ export const tradingAPI = {
     } catch (error) {
       throw new Error('API health check failed')
     }
-  }
+  },
+
+telegram: {
+    getStatus: async () => {
+      const response = await api.get('/api/telegram/status')
+      return response.data
+    },
+
+    fetchHistory: async (channelId, limit = 100) => {
+      const response = await api.post('/api/telegram/fetch-history', null, {
+        params: { channel_id: channelId, limit }
+      })
+      return response.data
+    },
+
+    startMonitoring: async (intervalSeconds = 60) => {
+      const response = await api.post('/api/telegram/start', null, {
+        params: { interval_seconds: intervalSeconds }
+      })
+      return response.data
+    },
+
+    fetchLatestMessages: async (channelId, limit) => {
+      const response = await api.post(`/api/telegram/channels/${channelId}/fetch-latest`, null, {
+        params: { limit }
+      })
+      return response.data
+    },
+
+    stopMonitoring: async () => {
+      const response = await api.post('/api/telegram/stop')
+      return response.data
+    },
+
+    getChannels: async () => {
+      const response = await api.get('/api/telegram/channels')
+      return response.data
+    },
+
+    addChannel: async (channelId, name, enabled = true) => {
+      const response = await api.post('/api/telegram/channels', null, {
+        params: {
+          channel_id: channelId,
+          name,
+          enabled
+        }
+      })
+      return response.data
+    },
+
+    updateChannel: async (channelId, updates) => {
+      const response = await api.put(`/api/telegram/channels/${channelId}`, null, {
+        params: updates
+      })
+      return response.data
+    },
+
+    deleteChannel: async (channelId) => {
+      const response = await api.delete(`/api/telegram/channels/${channelId}`)
+      return response.data
+    },
+
+    enableChannel: async (channelId) => {
+      const response = await api.post(`/api/telegram/channel/${channelId}/enable`)
+      return response.data
+    },
+
+    disableChannel: async (channelId) => {
+      const response = await api.post(`/api/telegram/channel/${channelId}/disable`)
+      return response.data
+    },
+
+    parseChannelMessages: async (channelId) => {
+      const response = await api.post(`/api/telegram/channels/${channelId}/parse`)
+      return response.data
+    },
+
+    getChannelMessages: async (channelId, limit = 10, offset = 0, parsedOnly = false) => {
+      const response = await api.get(`/api/telegram/channels/${channelId}/messages`, {
+        params: { limit, offset, parsed_only: parsedOnly }
+      })
+      return response.data
+    },
+
+    getChannelSignals: async (channelId, limit = 10, offset = 0) => {
+      const response = await api.get(`/api/telegram/channels/${channelId}/signals`, {
+        params: { limit, offset }
+      })
+      return response.data
+    }
+  },
+
+  messages: {
+    parseAll: async (limit = null) => {
+      const response = await api.post('/api/messages/parse-all', null, {
+        params: limit ? { limit } : {}
+      })
+      return response.data
+    },
+
+    getUnparsed: async (limit = 1) => {
+      const response = await api.get('/api/messages/unparsed', {
+        params: { limit }
+      })
+      return response.data
+    }
+  },
+
+  signals: {
+    process: async () => {
+      const response = await api.post('/api/signals/process')
+      return response.data
+    }
+  },
+ 
 }
 
 export default tradingAPI

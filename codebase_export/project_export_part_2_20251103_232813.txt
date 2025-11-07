@@ -1,0 +1,1422 @@
+=== EXPORT PART 2/10 ===
+
+=== ПРОДОЛЖЕНИЕ С ПРЕДЫДУЩЕГО ФАЙЛА ===
+
+                        # Выполняем запрос для батча
+                        session.execute(stmt)
+                        session.commit()  # Коммитим каждый батч отдельно
+                        total_saved += len(batch)
+                        
+                        logger.info(f"Saved batch {i//BATCH_SIZE + 1}: {len(batch)} records")
+                        
+                    except Exception as batch_error:
+                        session.rollback()  # Откатываем только текущий батч
+                        logger.error(f"Error saving batch {i//BATCH_SIZE + 1}: {batch_error}")
+                        continue
+                
+                logger.info(f"Successfully saved {total_saved} candles to database")
+                
+                return {'saved': total_saved, 'errors': errors}
+                
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error saving candles: {e}")
+                return {'saved': 0, 'errors': len(candles_data)}
+    
+    def get_candles(self, figi: str, interval: str, 
+                    from_time: datetime = None, to_time: datetime = None,
+                    limit: int = None) -> List[Dict]:
+        """Получить свечные данные (БЕЗ ОБЯЗАТЕЛЬНОГО ЛИМИТА)"""
+        with self.session() as session:
+            query = session.query(Candle).filter(
+                Candle.instrument_id == figi,
+                Candle.interval == interval
+            )
+            
+            if from_time:
+                query = query.filter(Candle.time >= from_time)
+            
+            if to_time:
+                query = query.filter(Candle.time <= to_time)
+            
+            query = query.order_by(asc(Candle.time))
+            
+            # Применяем лимит только если он явно указан
+            if limit is not None and limit > 0:
+                query = query.limit(limit)
+            
+            candles = query.all()
+            
+            return [
+                {
+                    'time': candle.time,
+                    'open': float(candle.open),
+                    'high': float(candle.high),
+                    'low': float(candle.low),
+                    'close': float(candle.close),
+                    'volume': candle.volume
+                }
+                for candle in candles
+            ]
+    
+    # ===== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ =====
+    
+    def create_trader(self, name: str, channel_id: int, 
+                     telegram_username: str = None) -> int:
+        """Создать профиль трейдера"""
+        with self.session() as session:
+            trader = Trader(
+                name=name,
+                channel_id=channel_id,
+                telegram_username=telegram_username,
+                is_active=True,
+                total_signals=0
+            )
+            
+            try:
+                session.add(trader)
+                session.flush()
+                logger.info(f"Trader created: {trader.name} (ID: {trader.id})")
+                return trader.id
+                
+            except IntegrityError:
+                session.rollback()
+                # Трейдер уже существует
+                existing = session.query(Trader).filter(Trader.name == name).first()
+                if existing:
+                    return existing.id
+                raise
+    
+    def get_total_messages_count(self) -> int:
+        """Получить общее количество сырых сообщений"""
+        with self.session() as session:
+            return session.query(RawMessage).count()
+
+    def save_signal_result(self, signal_id: str, result_data: Dict) -> str:
+        """Сохранить результат отслеживания сигнала"""
+        with self.session() as session:
+            result = SignalResult(
+                signal_id=signal_id,
+                planned_entry_price=result_data.get('planned_entry_price'),
+                actual_entry_price=result_data.get('actual_entry_price'),
+                exit_price=result_data.get('exit_price'),
+                profit_loss_pct=result_data.get('profit_loss_pct'),
+                profit_loss_abs=result_data.get('profit_loss_abs'),
+                entry_time=result_data.get('entry_time'),
+                exit_time=result_data.get('exit_time'),
+                duration_minutes=result_data.get('duration_minutes'),
+                status=result_data.get('status', 'active'),
+                exit_reason=result_data.get('exit_reason')
+            )
+            
+            session.add(result)
+            session.flush()
+            
+            logger.debug(f"Signal result saved: {result.id}")
+            return str(result.id)
+    
+    def update_signal_result(self, result_id: str, updates: Dict):
+        """Обновить результат сигнала"""
+        with self.session() as session:
+            session.query(SignalResult).filter(SignalResult.id == result_id).update(updates)
+    
+    def get_active_signals(self) -> List[Dict]:
+        """Получить активные сигналы для отслеживания"""
+        with self.session() as session:
+            query = session.query(ParsedSignal, SignalResult).outerjoin(SignalResult).filter(
+                or_(
+                    SignalResult.status == 'active',
+                    SignalResult.status.is_(None)  # Сигналы без результатов
+                )
+            )
+            
+            results = []
+            for signal, result in query.all():
+                signal_data = {
+                    'signal_id': str(signal.id),
+                    'timestamp': signal.timestamp,
+                    'ticker': signal.ticker,
+                    'direction': signal.direction,
+                    'target_price': float(signal.target_price) if signal.target_price else None,
+                    'stop_loss': float(signal.stop_loss) if signal.stop_loss else None,
+                    'take_profit': float(signal.take_profit) if signal.take_profit else None,
+                    'trader_id': signal.trader_id,
+                    'author': signal.author
+                }
+                
+                if result:
+                    signal_data.update({
+                        'result_id': str(result.id),
+                        'actual_entry_price': float(result.actual_entry_price) if result.actual_entry_price else None,
+                        'status': result.status,
+                        'entry_time': result.entry_time,
+                        'tracking_started_at': result.tracking_started_at
+                    })
+                
+                results.append(signal_data)
+            
+            return results
+    
+    def save_instrument(self, figi: str, ticker: str, name: str, 
+                       instrument_type: str = 'share') -> str:
+        """Сохранить информацию об инструменте"""
+        with self.session() as session:
+            instrument = Instrument(
+                figi=figi,
+                ticker=ticker,
+                name=name,
+                type=instrument_type,
+                is_active=True
+            )
+            
+            try:
+                session.merge(instrument)  # Используем merge для upsert
+                return figi
+                
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error saving instrument {ticker}: {e}")
+                raise
+    
+    def get_instrument_by_ticker(self, ticker: str) -> Optional[Dict]:
+        """Получить инструмент по тикеру"""
+        with self.session() as session:
+            instrument = session.query(Instrument).filter(
+                Instrument.ticker == ticker
+            ).first()
+            
+            if not instrument:
+                return None
+            
+            return {
+                'figi': instrument.figi,
+                'ticker': instrument.ticker,
+                'name': instrument.name,
+                'type': instrument.type,
+                'currency': instrument.currency,
+                'lot': instrument.lot,
+                'is_active': instrument.is_active
+            }
+    # ===== PATTERN MANAGEMENT METHODS =====
+
+    def get_all_patterns(self, category: Optional[str] = None, 
+                        active_only: bool = False) -> List[Dict]:
+        """
+        Получить все паттерны парсинга
+        
+        Args:
+            category: фильтр по категории
+            active_only: только активные паттерны
+            
+        Returns:
+            List[Dict]: список паттернов
+        """
+        with self.session() as session:
+            query = session.query(ParsingPattern)
+            
+            if category:
+                query = query.filter(ParsingPattern.category == category)
+            
+            if active_only:
+                query = query.filter(ParsingPattern.is_active == True)
+            
+            query = query.order_by(
+                ParsingPattern.category,
+                desc(ParsingPattern.priority),
+                ParsingPattern.name
+            )
+            
+            patterns = query.all()
+            
+            return [
+                {
+                    'id': p.id,
+                    'name': p.name,
+                    'category': p.category,
+                    'pattern': p.pattern,
+                    'priority': p.priority,
+                    'is_active': p.is_active,
+                    'description': p.description,
+                    'created_at': p.created_at.isoformat() if p.created_at else None,
+                    'updated_at': p.updated_at.isoformat() if p.updated_at else None
+                }
+                for p in patterns
+            ]
+
+    def get_pattern_by_id(self, pattern_id: int) -> Optional[Dict]:
+        """Получить паттерн по ID"""
+        with self.session() as session:
+            pattern = session.query(ParsingPattern).filter(
+                ParsingPattern.id == pattern_id
+            ).first()
+            
+            if not pattern:
+                return None
+            
+            return {
+                'id': pattern.id,
+                'name': pattern.name,
+                'category': pattern.category,
+                'pattern': pattern.pattern,
+                'priority': pattern.priority,
+                'is_active': pattern.is_active,
+                'description': pattern.description,
+                'created_at': pattern.created_at.isoformat() if pattern.created_at else None,
+                'updated_at': pattern.updated_at.isoformat() if pattern.updated_at else None
+            }
+
+    def create_pattern(self, pattern_data: Dict) -> int:
+        """
+        Создать новый паттерн
+        
+        Args:
+            pattern_data: данные паттерна
+            
+        Returns:
+            int: ID созданного паттерна
+        """
+        with self.session() as session:
+            pattern = ParsingPattern(
+                name=pattern_data['name'],
+                category=pattern_data['category'],
+                pattern=pattern_data['pattern'],
+                priority=pattern_data.get('priority', 0),
+                is_active=pattern_data.get('is_active', True),
+                description=pattern_data.get('description')
+            )
+            
+            try:
+                session.add(pattern)
+                session.flush()
+                pattern_id = pattern.id
+                return pattern_id
+            except IntegrityError:
+                session.rollback()
+                raise ValueError(f"Pattern with name '{pattern_data['name']}' already exists")
+
+    def update_pattern(self, pattern_id: int, update_data: Dict) -> bool:
+        """
+        Обновить паттерн
+        
+        Args:
+            pattern_id: ID паттерна
+            update_data: данные для обновления
+            
+        Returns:
+            bool: успешность операции
+        """
+        with self.session() as session:
+            pattern = session.query(ParsingPattern).filter(
+                ParsingPattern.id == pattern_id
+            ).first()
+            
+            if not pattern:
+                return False
+            
+            for key, value in update_data.items():
+                if hasattr(pattern, key) and key not in ['id', 'created_at']:
+                    setattr(pattern, key, value)
+            
+            session.flush()
+            return True
+
+    def delete_pattern(self, pattern_id: int) -> bool:
+        """
+        Удалить паттерн
+        
+        Args:
+            pattern_id: ID паттерна
+            
+        Returns:
+            bool: успешность операции
+        """
+        with self.session() as session:
+            pattern = session.query(ParsingPattern).filter(
+                ParsingPattern.id == pattern_id
+            ).first()
+            
+            if not pattern:
+                return False
+            
+            session.delete(pattern)
+            session.flush()
+            return True
+
+    def toggle_pattern(self, pattern_id: int) -> Optional[bool]:
+        """
+        Включить/выключить паттерн
+        
+        Args:
+            pattern_id: ID паттерна
+            
+        Returns:
+            Optional[bool]: новое состояние is_active или None если не найден
+        """
+        with self.session() as session:
+            pattern = session.query(ParsingPattern).filter(
+                ParsingPattern.id == pattern_id
+            ).first()
+            
+            if not pattern:
+                return None
+            
+            pattern.is_active = not pattern.is_active
+            session.flush()
+            return pattern.is_active
+
+    def get_patterns_by_category(self, category: str, 
+                                active_only: bool = True) -> List[Dict]:
+        """
+        Получить паттерны определенной категории
+        
+        Args:
+            category: категория паттернов
+            active_only: только активные
+            
+        Returns:
+            List[Dict]: список паттернов
+        """
+        return self.get_all_patterns(category=category, active_only=active_only)
+
+================================================================================
+File: tbot/core/database/migrations.py
+================================================================================
+# core/database/migrations.py
+"""
+Функции для создания и обновления схемы БД
+"""
+import logging
+from sqlalchemy import MetaData
+from .models import Base
+
+logger = logging.getLogger(__name__)
+
+def create_tables(engine):
+    """
+    Создать все таблицы в БД
+    
+    Args:
+        engine: SQLAlchemy engine
+    """
+    try:
+        Base.metadata.create_all(engine)
+        logger.info("✅ All database tables created successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to create tables: {e}")
+        return False
+
+def drop_tables(engine):
+    """
+    Удалить все таблицы из БД (ОСТОРОЖНО!)
+    
+    Args:
+        engine: SQLAlchemy engine
+    """
+    try:
+        Base.metadata.drop_all(engine)
+        logger.warning("⚠️ All database tables dropped")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to drop tables: {e}")
+        return False
+
+def get_table_info(engine) -> dict:
+    """
+    Получить информацию о существующих таблицах
+    
+    Args:
+        engine: SQLAlchemy engine
+        
+    Returns:
+        dict: информация о таблицах
+    """
+    try:
+        metadata = MetaData()
+        metadata.reflect(bind=engine)
+        
+        tables_info = {}
+        for table_name, table in metadata.tables.items():
+            tables_info[table_name] = {
+                'columns': len(table.columns),
+                'indexes': len(table.indexes),
+                'foreign_keys': len([fk for col in table.columns for fk in col.foreign_keys])
+            }
+        
+        return tables_info
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get table info: {e}")
+        return {}
+
+================================================================================
+File: tbot/core/database/models.py
+================================================================================
+# core/models.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
+from sqlalchemy import (
+    Column, String, BigInteger, Integer, Numeric, Text, 
+    Boolean, DateTime, UniqueConstraint, Index, ForeignKey
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
+import uuid
+from datetime import datetime
+from typing import Optional, Dict, Any
+from dataclasses import dataclass
+from enum import Enum
+
+Base = declarative_base()
+
+class SignalDirection(str, Enum):
+    LONG = "long"
+    SHORT = "short"
+    EXIT = "exit"
+
+class SignalStatus(str, Enum):
+    ACTIVE = "active"
+    CLOSED = "closed"
+    STOPPED = "stopped"
+    EXPIRED = "expired"
+
+# ===== TELEGRAM DATA MODELS =====
+
+class RawMessage(Base):
+    """Сырые сообщения из Telegram"""
+    __tablename__ = 'raw_messages'
+    
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    channel_id = Column(BigInteger, nullable=False)  # Без foreign key - просто ID
+    message_id = Column(BigInteger, nullable=False)
+    
+    # Автор сообщения
+    author_id = Column(BigInteger)
+    author_username = Column(String(100))
+    author_first_name = Column(String(100))
+    
+    # Содержимое сообщения
+    text = Column(Text)
+    views = Column(Integer, default=0)
+    forwards = Column(Integer, default=0)
+    
+    # Метаданные
+    edit_date = Column(DateTime(timezone=True))
+    media_type = Column(String(50))
+    reply_to_message_id = Column(BigInteger)
+    raw_data = Column(JSONB)
+    collected_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Статус обработки
+    is_processed = Column(Boolean, default=False)
+    parse_success = Column(Boolean, nullable=True)  # True = успешно, False = failed, NULL = не обработано
+    processing_attempts = Column(Integer, default=0)
+        
+    # Relationships - ТОЛЬКО с parsed_signals
+    parsed_signals = relationship("ParsedSignal", back_populates="raw_message")
+    
+    __table_args__ = (
+        UniqueConstraint('channel_id', 'message_id', name='unique_channel_message'),
+        Index('idx_raw_messages_channel_timestamp', 'channel_id', 'timestamp'),
+        Index('idx_raw_messages_unprocessed', 'is_processed', 'timestamp'),
+    )
+
+class ParsedSignal(Base):
+    """Распознанные торговые сигналы"""
+    __tablename__ = 'parsed_signals'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_message_id = Column(BigInteger, ForeignKey('raw_messages.id'), nullable=True)
+    
+    # Временные метки
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Метаданные парсинга
+    parser_version = Column(String(20), nullable=False)
+    confidence_score = Column(Numeric(3, 2))  # 0.00 - 1.00
+    
+    # Канал и автор
+    channel_id = Column(BigInteger, nullable=False)  # Без foreign key - просто ID
+    trader_id = Column(Integer, ForeignKey('traders.id'), nullable=True)
+    author = Column(String(100))  # Имя автора из сообщения
+    
+    # Исходный текст
+    original_text = Column(Text, nullable=False)
+    
+    # Основные торговые данные
+    ticker = Column(String(10), nullable=False, index=True)
+    figi = Column(String(12), nullable=True)  # FIGI для Tinkoff API
+    direction = Column(String(10))  # long, short, exit
+    signal_type = Column(String(10))  # entry, exit, update
+    
+    # Цены
+    target_price = Column(Numeric(12, 4))
+    stop_loss = Column(Numeric(12, 4))
+    take_profit = Column(Numeric(12, 4))
+    entry_condition = Column(String(20))  # market, limit, not_above, not_below
+    
+    # Дополнительные данные
+    confidence_level = Column(String(10))  # high, medium, low
+    timeframe = Column(String(10))  # 1h, 1d, 1w
+    views = Column(Integer, default=0)
+    
+    # Результаты парсинга
+    extracted_data = Column(JSONB)
+    
+    # Relationships
+    raw_message = relationship("RawMessage", back_populates="parsed_signals")
+    trader = relationship("Trader", back_populates="signals")
+    signal_result = relationship("SignalResult", back_populates="signal", uselist=False)
+    
+    __table_args__ = (
+        Index('idx_parsed_signals_ticker_timestamp', 'ticker', 'timestamp'),
+        Index('idx_parsed_signals_author', 'author'),
+        Index('idx_parsed_signals_direction', 'direction'),
+        Index('idx_parsed_signals_channel_timestamp', 'channel_id', 'timestamp'),
+    )
+
+# ===== TRADER TRACKING MODELS =====
+
+class Trader(Base):
+    """Профили трейдеров для отслеживания статистики"""
+    __tablename__ = 'traders'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
+    telegram_username = Column(String(100))
+    channel_id = Column(BigInteger, nullable=False)  # Без foreign key - просто ID
+    
+    # Метаданные
+    is_active = Column(Boolean, default=True)
+    first_signal_at = Column(DateTime(timezone=True))
+    last_signal_at = Column(DateTime(timezone=True))
+    total_signals = Column(Integer, default=0)
+    
+    # Кешированная статистика (обновляется периодически)
+    win_rate = Column(Numeric(5, 2))  # Процент прибыльных сделок
+    avg_profit_pct = Column(Numeric(8, 4))  # Средняя прибыль в %
+    max_drawdown_pct = Column(Numeric(8, 4))  # Максимальная просадка в %
+    sharpe_ratio = Column(Numeric(6, 3))
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships - БЕЗ channel
+    signals = relationship("ParsedSignal", back_populates="trader")
+    
+    __table_args__ = (
+        Index('idx_traders_name', 'name'),
+        Index('idx_traders_active', 'is_active'),
+    )
+
+class SignalResult(Base):
+    """Результаты отслеживания сигналов"""
+    __tablename__ = 'signal_results'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    signal_id = Column(UUID(as_uuid=True), ForeignKey('parsed_signals.id'), nullable=False)
+    
+    # Цены исполнения (факт vs план)
+    planned_entry_price = Column(Numeric(12, 4))  # Запланированная цена входа
+    actual_entry_price = Column(Numeric(12, 4))   # Фактическая цена входа
+    exit_price = Column(Numeric(12, 4))           # Цена выхода
+    
+    # Результаты
+    profit_loss_pct = Column(Numeric(8, 4))       # P&L в процентах
+    profit_loss_abs = Column(Numeric(12, 4))      # P&L в абсолютных значениях
+    
+    # Временные метки
+    entry_time = Column(DateTime(timezone=True))   # Время входа
+    exit_time = Column(DateTime(timezone=True))    # Время выхода
+    duration_minutes = Column(Integer)             # Время в позиции
+    
+    # Статус позиции
+    status = Column(String(20), default='active') # active, closed, stopped, expired
+    exit_reason = Column(String(50))               # take_profit, stop_loss, manual, timeout
+    
+    # Метаданные отслеживания
+    tracking_started_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    signal = relationship("ParsedSignal", back_populates="signal_result")
+    
+    __table_args__ = (
+        Index('idx_signal_results_status', 'status'),
+        Index('idx_signal_results_profit', 'profit_loss_pct'),
+        Index('idx_signal_results_duration', 'duration_minutes'),
+    )
+
+# ===== MARKET DATA MODELS =====
+
+class Instrument(Base):
+    """Инструменты для торговли"""
+    __tablename__ = 'instruments'
+    
+    figi = Column(String(12), primary_key=True)
+    ticker = Column(String(10), unique=True, nullable=False)
+    name = Column(String(200))
+    type = Column(String(20))  # share, etf, bond, future, currency
+    currency = Column(String(3))
+    lot = Column(Integer, default=1)
+    
+    # Метаданные
+    is_active = Column(Boolean, default=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_instruments_ticker', 'ticker'),
+        Index('idx_instruments_type', 'type'),
+    )
+
+class ParsingPattern(Base):
+    """Паттерны для парсинга сообщений (регулярные выражения)"""
+    __tablename__ = 'parsing_patterns'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    category = Column(String(50), nullable=False)
+    pattern = Column(Text, nullable=False)
+    priority = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    description = Column(Text)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_patterns_category_priority', 'category', 'priority', 'is_active'),
+        Index('idx_patterns_active', 'is_active'),
+    )
+
+class Candle(Base):
+    """Свечные данные"""
+    __tablename__ = 'candles'
+    
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    instrument_id = Column(String(12), ForeignKey('instruments.figi'), nullable=False)
+    interval = Column(String(10), nullable=False)  # 1min, 5min, hour, day
+    time = Column(DateTime(timezone=True), nullable=False)
+    
+    open = Column(Numeric(12, 4), nullable=False)
+    high = Column(Numeric(12, 4), nullable=False)
+    low = Column(Numeric(12, 4), nullable=False)
+    close = Column(Numeric(12, 4), nullable=False)
+    volume = Column(BigInteger, default=0)
+    
+    __table_args__ = (
+        UniqueConstraint('instrument_id', 'interval', 'time', name='unique_candle'),
+        Index('idx_candles_instrument_time', 'instrument_id', 'time'),
+        Index('idx_candles_interval_time', 'interval', 'time'),
+    )
+
+class ConsensusEvent(Base):
+    """События консенсуса трейдеров"""
+    __tablename__ = 'consensus_events'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Основные параметры
+    ticker = Column(String(10), nullable=False, index=True)
+    direction = Column(String(10), nullable=False)  # long, short
+    
+    # Параметры консенсуса
+    traders_count = Column(Integer, nullable=False)  # Количество уникальных трейдеров
+    window_minutes = Column(Integer, nullable=False)  # Размер окна в минутах
+    
+    # Временные метки
+    first_signal_at = Column(DateTime(timezone=True), nullable=False)
+    last_signal_at = Column(DateTime(timezone=True), nullable=False)
+    detected_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Ценовые данные
+    avg_entry_price = Column(Numeric(12, 4))
+    min_entry_price = Column(Numeric(12, 4))
+    max_entry_price = Column(Numeric(12, 4))
+    price_spread_pct = Column(Numeric(8, 4))  # Разброс цен в %
+    
+    # Статус
+    status = Column(String(20), default='active')  # active, closed, expired
+    
+    # Метаданные
+    consensus_strength = Column(Integer)  # Оценка силы консенсуса 0-100
+    consensus_metadata = Column(JSONB)
+    
+    # Relationships
+    signals = relationship("ConsensusSignal", back_populates="consensus")
+    
+    __table_args__ = (
+        Index('idx_consensus_ticker_detected', 'ticker', 'detected_at'),
+        Index('idx_consensus_status', 'status'),
+        Index('idx_consensus_strength', 'consensus_strength'),
+    )
+
+class ConsensusSignal(Base):
+    """Связь сигналов с консенсусом"""
+    __tablename__ = 'consensus_signals'
+    
+    id = Column(Integer, primary_key=True)
+    consensus_id = Column(UUID(as_uuid=True), ForeignKey('consensus_events.id'), nullable=False)
+    signal_id = Column(UUID(as_uuid=True), ForeignKey('parsed_signals.id'), nullable=False)
+    
+    # Метаданные
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_initiator = Column(Boolean, default=False)  # Был ли этот сигнал инициатором консенсуса
+    
+    # Relationships
+    consensus = relationship("ConsensusEvent", back_populates="signals")
+    signal = relationship("ParsedSignal")
+    
+    __table_args__ = (
+        UniqueConstraint('consensus_id', 'signal_id', name='unique_consensus_signal'),
+        Index('idx_consensus_signals_consensus', 'consensus_id'),
+        Index('idx_consensus_signals_signal', 'signal_id'),
+    )
+
+# ===== DATACLASSES FOR API RESPONSES =====
+
+@dataclass
+class TraderStatsResponse:
+    """Статистика трейдера для API"""
+    trader_name: str
+    total_signals: int
+    active_signals: int
+    closed_signals: int
+    win_rate: float
+    avg_profit_pct: float
+    max_drawdown_pct: float
+    sharpe_ratio: Optional[float]
+    first_signal: Optional[datetime]
+    last_signal: Optional[datetime]
+
+@dataclass
+class SignalWithResult:
+    """Сигнал с результатом для API"""
+    signal_id: str
+    timestamp: datetime
+    trader: str
+    ticker: str
+    direction: str
+    target_price: Optional[float]
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+    
+    # Результаты (если есть)
+    actual_entry_price: Optional[float] = None
+    exit_price: Optional[float] = None
+    profit_loss_pct: Optional[float] = None
+    duration_minutes: Optional[int] = None
+    status: str = 'active'
+    exit_reason: Optional[str] = None
+
+@dataclass
+class ChartDataPoint:
+    """Точка данных для графика"""
+    timestamp: datetime
+    price: float
+    signal_type: Optional[str] = None  # 'entry_long', 'entry_short', 'exit'
+    signal_id: Optional[str] = None
+    trader: Optional[str] = None
+
+================================================================================
+File: tbot/api/app.py
+================================================================================
+# api/app.py
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import logging
+from typing import Optional, List, Dict
+from datetime import datetime, timedelta
+import asyncio
+import os
+from enum import Enum
+from analysis.consensus_detector import get_consensus_detector
+from analysis.message_parser import MessageParser, MessageParsingService
+from core.database import Database
+from core.database.models import *
+from analysis.signal_matcher import SignalMatcher
+from integrations.tinkoff_integration import TinkoffIntegration
+from integrations.historical_data_loader import HistoricalDataLoader
+from utils.datetime_utils import now_utc, utc_from_days_ago, ensure_timezone_aware, days_between_utc
+from integrations.telegram_scraper import TelegramScraper
+from integrations.telegram_channels_config import CHANNELS, SCRAPER_CONFIG
+import re
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("trader_tracker_api")
+
+# Глобальные переменные
+db_manager: Database = None
+message_parsing_service: MessageParsingService = None
+signal_matcher: SignalMatcher = None
+tinkoff_client: TinkoffIntegration = None
+background_tasks_running = False
+historical_data_loader: HistoricalDataLoader = None
+consensus_detector = None
+telegram_scraper: TelegramScraper = None
+telegram_monitoring_task = None
+
+# Энумы для валидации параметров
+class SignalStatus(str, Enum):
+    ALL = "all"
+    ACTIVE = "active"
+    CLOSED = "closed"
+    STOPPED = "stopped"
+    EXPIRED = "expired"
+
+class SignalDirection(str, Enum):
+    ALL = "all"
+    LONG = "long"
+    SHORT = "short"
+    EXIT = "exit"
+
+class OrderBy(str, Enum):
+    TIMESTAMP = "timestamp"
+    TICKER = "ticker"
+    AUTHOR = "author"
+    CONFIDENCE = "confidence"
+
+class OrderDirection(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+def get_db_manager() -> Database:
+    """Получение экземпляра Database"""
+    if db_manager is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    return db_manager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Управление жизненным циклом приложения"""
+    global signal_matcher, tinkoff_client, background_tasks_running, message_parsing_service, db_manager, historical_data_loader, telegram_scraper, telegram_monitoring_task
+    
+    try:
+        logger.info("🚀 Initializing Trader Tracker API...")
+        
+        # Инициализируем БД
+        database_url = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/trader_tracker")
+        db_manager = Database(database_url)
+        message_parsing_service = MessageParsingService(
+            db_manager=db_manager,
+            parser=MessageParser(db_manager)
+        )
+        logger.info("✅ Database initialized")
+        
+        consensus_detector = get_consensus_detector(db_manager)
+        logger.info("✅ Consensus detector initialized")
+
+        # Инициализируем Tinkoff
+        tinkoff_token = os.getenv("TINKOFF_TOKEN")
+        if tinkoff_token:
+            try:
+                tinkoff_client = TinkoffIntegration(tinkoff_token)
+                await tinkoff_client.initialize()
+                logger.info("✅ Tinkoff client initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Tinkoff integration failed: {e}")
+                tinkoff_client = None
+        
+        # Инициализируем signal matcher
+        signal_matcher = SignalMatcher(db_manager, tinkoff_client)
+        
+        # Инициализируем historical data loader
+        if tinkoff_client:
+            historical_data_loader = HistoricalDataLoader(db_manager, tinkoff_client)
+        
+        # Инициализация Telegram Scraper
+        telegram_api_id = os.getenv("tg_api_id")
+        telegram_api_hash = os.getenv("tg_api_hash")
+        
+        if telegram_api_id and telegram_api_hash:
+            try:
+                telegram_scraper = TelegramScraper(
+                    api_id=int(telegram_api_id),
+                    api_hash=telegram_api_hash,
+                    db_manager=db_manager
+                )
+                
+                if await telegram_scraper.initialize():
+                    for channel in CHANNELS:
+                        await telegram_scraper.add_channel(
+                            channel_id=channel['id'],
+                            name=channel['name'],
+                            enabled=channel['enabled']
+                        )
+                    
+                    logger.info("✅ Telegram scraper initialized")
+                else:
+                    telegram_scraper = None
+                    logger.warning("⚠️ Telegram scraper failed to initialize")
+            except Exception as e:
+                logger.error(f"❌ Telegram scraper error: {e}")
+                telegram_scraper = None
+        else:
+            logger.warning("⚠️ Telegram credentials not found, scraper disabled")
+
+        # Сейчас нет смысла в background tasks, это на будущее
+        background_tasks_running = False
+        asyncio.create_task(background_signal_processing())
+        
+        logger.info("🎉 Application initialized successfully")
+        yield
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize application: {e}")
+        raise
+    finally:
+        # Очистка при завершении
+        background_tasks_running = False
+        if tinkoff_client:
+            await tinkoff_client.close()
+        if telegram_scraper:
+            await telegram_scraper.close()
+        logger.info("👋 Application shutdown completed")
+
+# Создание приложения
+app = FastAPI(
+    title="Trader Tracker API",
+    description="Универсальный API для анализа торговых сигналов",
+    version="2.0.0",
+    lifespan=lifespan
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# WebSocket connections
+websocket_connections: Dict[str, WebSocket] = {}
+
+# ===== BACKGROUND TASKS =====
+
+async def background_signal_processing():
+    """Фоновая обработка сигналов"""
+    global background_tasks_running, signal_matcher
+    
+    while background_tasks_running:
+        try:
+            if signal_matcher:
+                # Обрабатываем новые сигналы
+                new_tracked = await signal_matcher.process_untracked_signals(limit=20)
+                if new_tracked > 0:
+                    logger.info(f"📈 Started tracking {new_tracked} new signals")
+                
+                # Обновляем активные позиции
+                updated = await signal_matcher.update_active_positions()
+                if updated > 0:
+                    logger.info(f"🔄 Updated {updated} active positions")
+            
+            await asyncio.sleep(60)  # Каждую минуту
+            
+        except Exception as e:
+            logger.error(f"❌ Error in background processing: {e}")
+            await asyncio.sleep(300)  # При ошибке ждем 5 минут
+
+async def broadcast_update(data: dict):
+    """Рассылка обновлений через WebSocket"""
+    if websocket_connections:
+        for connection_id, websocket in list(websocket_connections.items()):
+            try:
+                await websocket.send_json(data)
+            except:
+                del websocket_connections[connection_id]
+
+# ===== UTILITY FUNCTIONS =====
+
+def parse_time_range(hours_back: Optional[int] = None, days_back: Optional[int] = None) -> Optional[datetime]:
+    """Парсинг временного диапазона с правильными timezone"""
+    if hours_back:
+        return ensure_timezone_aware(datetime.utcnow() - timedelta(hours=hours_back))
+    elif days_back:
+        return ensure_timezone_aware(datetime.utcnow() - timedelta(days=days_back))
+    return None
+
+# ===== SYSTEM ENDPOINTS =====
+
+@app.get("/")
+async def root():
+    """Корневой endpoint"""
+    return {
+        "service": "Trader Tracker API",
+        "version": "2.0.0",
+        "status": "running",
+        "timestamp": datetime.utcnow().isoformat(),
+        "endpoints": {
+            "signals": "/api/signals",
+            "traders": "/api/traders", 
+            "tickers": "/api/tickers",
+            "consensus": "/api/consensus",
+            "health": "/api/health",
+            "docs": "/docs"
+        }
+    }
+
+@app.get("/api/health")
+async def health_check():
+    """Проверка здоровья сервиса"""
+    try:
+        db = get_db_manager()
+        health = db.health_check()
+        
+        return {
+            "status": "healthy",
+            "database": health.get('status', 'unknown'),
+            "tinkoff": "connected" if tinkoff_client else "not_configured",
+            "background_tasks": "running" if background_tasks_running else "stopped",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+@app.get("/api/statistics")
+async def get_system_statistics():
+    """Общая статистика системы"""
+    try:
+        db = get_db_manager()
+        stats = db.get_system_statistics()
+        return stats
+    except Exception as e:
+        logger.error(f"Failed to get statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ===== SIGNALS ENDPOINTS =====
+
+@app.get("/api/signals/stats")
+async def get_signal_stats():
+    """Статистика по сигналам"""
+    try:
+        db = get_db_manager()
+        
+        with db.session() as session:
+            total_signals = session.query(ParsedSignal).count()
+            total_messages = session.query(RawMessage).count()
+            processed_messages = session.query(RawMessage).filter(
+                RawMessage.is_processed == True
+            ).count()
+            failed_messages = session.query(RawMessage).filter(
+                RawMessage.is_processed == True,
+                RawMessage.parse_success == False
+            ).count()
+            successfully_parsed = session.query(RawMessage).filter(
+                RawMessage.is_processed == True,
+                RawMessage.parse_success == True
+            ).count()
+            
+            unique_tickers = session.query(ParsedSignal.ticker).distinct().count()
+            
+            last_24h = datetime.utcnow() - timedelta(hours=24)
+            recent_signals = session.query(ParsedSignal).filter(
+                ParsedSignal.timestamp >= last_24h
+            ).count()
+            
+            return {
+                "total_signals": total_signals,
+                "total_messages": total_messages,
+                "processed_messages": processed_messages,
+                "successfully_parsed": successfully_parsed,
+                "failed_messages": failed_messages,
+                "unparsed_messages": total_messages - processed_messages,
+                "unique_tickers": unique_tickers,
+                "recent_signals_24h": recent_signals
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to get signal stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/signals")
+async def get_signals(
+    # Фильтры
+    ticker: Optional[str] = Query(None, description="Фильтр по тикеру"),
+    author: Optional[str] = Query(None, description="Фильтр по автору"),
+    trader_id: Optional[int] = Query(None, description="Фильтр по ID трейдера"),
+    direction: SignalDirection = Query(SignalDirection.ALL, description="Направление сигнала"),
+    status: SignalStatus = Query(SignalStatus.ALL, description="Статус сигнала"),
+    
+    # Временные фильтры
+    hours_back: Optional[int] = Query(None, description="Сигналы за последние N часов"),
+    days_back: Optional[int] = Query(None, description="Сигналы за последние N дней"),
+    
+    # Пагинация и сортировка
+    limit: int = Query(50, ge=1, le=1000, description="Количество сигналов"),
+    offset: int = Query(0, ge=0, description="Смещение для пагинации"),
+    order_by: OrderBy = Query(OrderBy.TIMESTAMP, description="Поле для сортировки"),
+    order_dir: OrderDirection = Query(OrderDirection.DESC, description="Направление сортировки"),
+    
+    # Дополнительные параметры
+    include_stats: bool = Query(False, description="Включить статистику в ответ")
+):
+    """
+    🎯 Универсальный эндпоинт для получения сигналов
+    
+    Поддерживает все виды фильтрации и сортировки.
+    Заменяет все старые эндпоинты сигналов.
+    """
+    try:
+        db = get_db_manager()
+        
+        # Парсим временной диапазон
+        from_date = parse_time_range(hours_back, days_back)
+        
+        # Получаем сигналы с фильтрами
+        signals = db.get_signals_universal(
+            ticker=ticker,
+            author=author,
+            trader_id=trader_id,
+            direction=direction if direction != SignalDirection.ALL else None,
+            status=status if status != SignalStatus.ALL else None,
+            from_date=from_date,
+            limit=limit,
+            offset=offset,
+            order_by=order_by.value,
+            order_desc=(order_dir == OrderDirection.DESC)
+        )
+        
+        response = {
+            "count": len(signals),
+            "signals": signals,
+            "filters": {
+                "ticker": ticker,
+                "author": author,
+                "trader_id": trader_id,
+                "direction": direction,
+                "status": status,
+                "from_date": from_date.isoformat() if from_date else None
+            },
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "has_more": len(signals) == limit  # Простая эвристика
+            }
+        }
+        
+        # Добавляем статистику если запрошена
+        if include_stats:
+            stats = db.get_signals_stats(
+                ticker=ticker,
+                author=author,
+                trader_id=trader_id,
+                direction=direction if direction != SignalDirection.ALL else None,
+                from_date=from_date
+            )
+            response["stats"] = stats
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to get signals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/signals/{signal_id}")
+async def get_signal_details(signal_id: str):
+    """Получение детальной информации о сигнале"""
+    try:
+        db = get_db_manager()
+        signal = db.get_signal_by_id(signal_id)
+        
+        if not signal:
+            raise HTTPException(status_code=404, detail="Signal not found")
+        
+        return signal
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get signal {signal_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ===== TRADERS ENDPOINTS =====
+
+@app.get("/api/traders")
+async def get_traders(
+    include_stats: bool = Query(False, description="Включить статистику по каждому трейдеру"),
+    active_only: bool = Query(True, description="Только активные трейдеры")
+):
+    """Получение списка трейдеров"""
+    try:
+        db = get_db_manager()
+        traders = db.get_traders(include_stats=include_stats, active_only=active_only)
+        return {
+            "count": len(traders),
+            "traders": traders
+        }
+    except Exception as e:
+        logger.error(f"Failed to get traders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/traders/{trader_id}")
+async def get_trader_details(trader_id: int):
+    """Получение детальной информации о трейдере"""
+    try:
+        db = get_db_manager()
+        trader = db.get_trader_by_id(trader_id)
+        
+        if not trader:
+            raise HTTPException(status_code=404, detail="Trader not found")
+        
+        return trader
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get trader {trader_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/traders/{trader_id}/stats")
+async def get_trader_statistics(
+    trader_id: int,
+    days_back: int = Query(30, ge=1, le=365, description="Период для статистики")
+):
+    """Получение статистики трейдера"""
+    try:
+        db = get_db_manager()
+        from_date = ensure_timezone_aware(datetime.utcnow() - timedelta(days=days_back))
+        
+        stats = db.get_trader_stats(trader_id, from_date=from_date)
+        
+        if not stats:
+            raise HTTPException(status_code=404, detail="Trader not found")
+        
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get trader {trader_id} stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ===== MARKET DATA ENDPOINTS =====
+
+@app.get("/api/tickers")
+async def get_available_tickers(
+    with_stats: bool = Query(True, description="Включить статистику по тикерам"),
+    include_candles_stats: bool = Query(False, description="Включить статистику по свечам")
+):
+    """Получение списка доступных тикеров"""
+    try:
+        db = get_db_manager()
+        tickers = db.get_available_tickers(
+            with_stats=with_stats, 
+            include_candles_stats=include_candles_stats
+        )
+        return {
+            "count": len(tickers),
+            "tickers": tickers
+        }
+    except Exception as e:
+        logger.error(f"Failed to get tickers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/api/candles/{ticker}")
+async def get_candles_data(
+    ticker: str,
+    days: int = Query(30, ge=1, le=365, description="Количество дней"),
+    interval: str = Query('5min', description="Интервал свечей (1min, 5min, hour, day)")
+):
+    """Получение свечных данных для тикера"""
+    try:
+        db = get_db_manager()
+        
+        # Валидация интервала
+        valid_intervals = ['1min', '5min', 'hour', 'day']
+        if interval not in valid_intervals:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid interval. Supported: {', '.join(valid_intervals)}"
+            )
+        
+        instrument = db.get_instrument_by_ticker(ticker.upper())
+        
+        if not instrument and tinkoff_client:
+            logger.info(f"Instrument {ticker} not in DB, searching via Tinkoff API...")
+            try:
+                api_instrument = await tinkoff_client.find_instrument_by_ticker(ticker)
+                if api_instrument:
+                    db.save_instrument(
+                        figi=api_instrument["figi"],
+                        ticker=ticker,
+                        name=api_instrument["name"],
+                        instrument_type=api_instrument.get("type", "share")
+                    )
+                    instrument = db.get_instrument_by_ticker(ticker.upper())
+                    logger.info(f"✅ Added instrument {ticker} to database")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to find instrument via API: {e}")
+        
+        if not instrument:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Instrument {ticker} not found"
+            )
+        
+        figi = instrument['figi']
+        from_date = ensure_timezone_aware(datetime.utcnow() - timedelta(days=days))
+        
+        candles = db.get_candles(
+            figi=figi,
+            interval=interval,
+            from_time=from_date
+        )
+        
+        # Если свечей нет в БД - загружаем через API
+        if not candles and tinkoff_client:
+            logger.info(f"No candles for {ticker} ({interval}) in DB, loading from Tinkoff API...")
+            try:
+                to_date = ensure_timezone_aware(datetime.utcnow())
+                api_candles = await tinkoff_client.get_candles(
+                    figi=figi,
+                    interval=interval,
+                    from_time=from_date,
+                    to_time=to_date
+                )
+                
+                if api_candles:
+                    save_result = db.save_candles(api_candles, figi=figi, interval=interval)
+                    if save_result.get('saved', 0) > 0:
+                        candles = api_candles
+                        logger.info(f"✅ Loaded and saved {len(candles)} candles for {ticker}")
+                    else:
+                        logger.warning(f"⚠️ Failed to save {len(api_candles)} candles to DB")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to load candles from API: {e}")
+        
+        if not candles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No candle data available for {ticker}"
+            )
+        
+        return {
+            "ticker": ticker,
+            "figi": figi,
+            "interval": interval,
+            "count": len(candles),
+            "period_days": days,
+            "candles": candles
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get candles for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+=== КОД ОБРЫВАЕТСЯ. ПРОДОЛЖЕНИЕ В СЛЕДУЮЩЕМ ФАЙЛЕ ===
+

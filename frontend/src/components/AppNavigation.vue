@@ -17,7 +17,15 @@
           >
             🏠 Дашборд
           </router-link>
-          
+
+          <router-link 
+            to="/data-management" 
+            :class="$route.name === 'DataManagement' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            📊 Управление
+          </router-link>
+
           <router-link 
             to="/signals" 
             :class="$route.name === 'AllSignals' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
@@ -26,6 +34,14 @@
             🎯 Все сигналы
           </router-link>
           
+          <router-link 
+            to="/consensus" 
+            :class="$route.name === 'Consensus' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="px-3 py-2 rounded-md text-sm font-medium transition-colors"
+          >
+            🔥 Консенсус
+          </router-link>
+
           <router-link 
             to="/signals-chart" 
             :class="$route.name === 'SignalsChart' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"

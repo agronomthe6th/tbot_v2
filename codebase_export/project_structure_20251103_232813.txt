@@ -1,0 +1,51 @@
+=== Project Structure ===
+.
+├── frontend
+│   ├── src
+│   │   ├── frontend/src/App.vue
+│   │   ├── components
+│   │   │   ├── frontend/src/components/AppNavigation.vue
+│   │   │   ├── frontend/src/components/DataManagement.vue
+│   │   │   ├── frontend/src/components/SignalCard.vue
+│   │   │   ├── charts
+│   │   │   │   └── frontend/src/components/charts/UnifiedTradingChart.vue
+│   │   │   ├── patterns
+│   │   │   │   ├── frontend/src/components/patterns/PatternFormModal.vue
+│   │   │   │   └── frontend/src/components/patterns/PatternTesterModal.vue
+│   │   │   ├── signals
+│   │   │   └── widgets
+│   │   ├── router
+│   │   ├── services
+│   │   ├── stores
+│   │   └── views
+│   │       ├── frontend/src/views/AllSignals.vue
+│   │       ├── frontend/src/views/CleanChart.vue
+│   │       ├── frontend/src/views/ConsensusPage.vue
+│   │       ├── frontend/src/views/DataDiagnostics.vue
+│   │       ├── frontend/src/views/DataManagement.vue
+│   │       ├── frontend/src/views/PatternsManager.vue
+│   │       ├── frontend/src/views/SignalsChart.vue
+│   │       ├── frontend/src/views/TraderProfile.vue
+│   │       └── frontend/src/views/TradingDashboard.vue
+├── tbot
+│   ├── analysis
+│   │   ├── tbot/analysis/consensus_detector.py
+│   │   ├── tbot/analysis/message_parser.py
+│   │   ├── tbot/analysis/pattern_manager.py
+│   │   └── tbot/analysis/signal_matcher.py
+│   ├── api
+│   │   └── tbot/api/app.py
+│   ├── tbot/config.py
+│   ├── core
+│   │   └── database
+│   │       ├── tbot/core/database/database.py
+│   │       ├── tbot/core/database/migrations.py
+│   │       └── tbot/core/database/models.py
+│   ├── integrations
+│   │   ├── tbot/integrations/historical_data_loader.py
+│   │   ├── tbot/integrations/telegram_channels_config.py
+│   │   ├── tbot/integrations/telegram_scraper.py
+│   │   └── tbot/integrations/tinkoff_integration.py
+│   ├── tbot/start_demo.py
+│   └── utils
+│       └── tbot/utils/datetime_utils.py

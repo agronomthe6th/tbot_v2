@@ -7,6 +7,7 @@ import TraderProfile from '../views/TraderProfile.vue'
 import AllSignals from '../views/AllSignals.vue'
 import DataDiagnostics from '../views/DataDiagnostics.vue'
 import PatternsManager from '../views/PatternsManager.vue'
+import ConsensusPage from '../views/ConsensusPage.vue'
 
 const routes = [
   {
@@ -28,6 +29,12 @@ const routes = [
     meta: { title: '📊 Чистый график' }
   },
   {
+  path: '/data-management',
+  name: 'DataManagement',
+  component: () => import('../views/DataManagement.vue'),
+  meta: { title: '📊 Управление данными' }
+  },
+  {
     path: '/patterns',
     name: 'PatternsManager',
     component: PatternsManager,
@@ -44,6 +51,12 @@ const routes = [
     name: 'TradersOverview',
     component: TraderProfile, // Можно использовать тот же компонент без ID для списка
     meta: { title: '👥 Трейдеры' }
+  },
+  {
+    path: '/consensus',
+    name: 'Consensus',
+    component: ConsensusPage,
+    meta: { title: '🔥 Консенсус Трейдеров' }
   },
   {
     path: '/signals',

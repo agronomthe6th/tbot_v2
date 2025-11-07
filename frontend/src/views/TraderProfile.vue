@@ -1,7 +1,6 @@
-<!-- frontend/src/views/TraderProfile.vue - ИСПРАВЛЕННАЯ ВЕРСИЯ -->
 <template>
   <div class="min-h-screen bg-trading-bg text-white p-4">
-    <!-- Если нет ID - показываем список всех трейдеров -->
+    <!-- Список всех трейдеров -->
     <div v-if="!currentTraderId">
       <div class="mb-6">
         <h1 class="text-2xl font-bold">👥 Все трейдеры</h1>
@@ -53,111 +52,101 @@
 
     <!-- Профиль конкретного трейдера -->
     <div v-else>
-      <!-- Отладочная информация (уберем потом) -->
-      <div class="mb-4 p-2 bg-gray-800 rounded text-xs text-gray-300">
-        DEBUG: traderId={{ currentTraderId }}, loading={{ isLoading }}, hasStats={{ !!traderStats }}
-      </div>
-
       <!-- Навигация назад -->
       <div class="mb-6">
         <button 
-          @click="$router.back()"
+          @click="$router.push('/traders')"
           class="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-4"
         >
-          ← Назад
+          ← Назад к списку трейдеров
         </button>
         
+        <!-- Заголовок с именем трейдера -->
         <div v-if="traderStats">
-          <h1 class="text-2xl font-bold">👤 {{ traderStats.name }}</h1>
-          <div class="flex items-center gap-4 text-gray-400">
-            <span v-if="traderStats.telegram_username">@{{ traderStats.telegram_username }}</span>
-            <span :class="traderStats.is_active ? 'text-trading-green' : 'text-gray-400'">
-              {{ traderStats.is_active ? '🟢 Активен' : '⚪ Неактивен' }}
-            </span>
+          <h1 class="text-2xl font-bold">👤 {{ traderStats.trader_name || 'Трейдер' }}</h1>
+          <div class="flex items-center gap-4 text-gray-400 mt-2">
+            <span>ID: {{ traderStats.trader_id }}</span>
           </div>
+        </div>
+        <div v-else-if="!isLoading">
+          <h1 class="text-2xl font-bold text-gray-400">👤 Трейдер не найден</h1>
         </div>
       </div>
 
-      <!-- Загрузка профиля -->
+      <!-- Загрузка -->
       <div v-if="isLoading" class="flex items-center justify-center h-64">
         <div class="text-center">
-          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-trading-green mx-auto mb-4"></div>
-          <p>Загрузка профиля трейдера {{ currentTraderId }}...</p>
+          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-trading-green mx-auto mb-4"></div>
+          <p>Загрузка данных...</p>
         </div>
       </div>
 
       <!-- Ошибка -->
-      <div v-else-if="error" class="flex items-center justify-center h-64">
-        <div class="text-center">
-          <div class="text-4xl mb-4">⚠️</div>
-          <h3 class="text-xl font-semibold mb-2 text-trading-red">Ошибка загрузки</h3>
-          <p class="text-gray-400 mb-4">{{ error }}</p>
-          <button 
-            @click="loadTraderData"
-            class="px-4 py-2 bg-trading-green text-black rounded hover:bg-opacity-80 transition-colors"
-          >
-            Повторить
-          </button>
-        </div>
+      <div v-else-if="error" class="bg-red-900/20 border border-red-500 rounded-lg p-4 text-center">
+        <p class="text-red-400">{{ error }}</p>
+        <button 
+          @click="loadTraderData"
+          class="mt-4 px-4 py-2 bg-trading-green hover:bg-green-600 text-black rounded-md transition-colors"
+        >
+          🔄 Попробовать снова
+        </button>
       </div>
 
       <!-- Данные трейдера -->
       <div v-else-if="traderStats" class="space-y-6">
-        <!-- Основная статистика -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="bg-trading-card rounded-lg p-4 border border-trading-border">
-            <div class="text-sm text-gray-400">Всего сигналов</div>
+        <!-- Статистика -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Всего сигналов</div>
             <div class="text-2xl font-bold">{{ traderStats.total_signals || 0 }}</div>
           </div>
-          <div class="bg-trading-card rounded-lg p-4 border border-trading-border">
-            <div class="text-sm text-gray-400">Закрытых сделок</div>
+          
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Закрытых сделок</div>
             <div class="text-2xl font-bold">{{ traderStats.closed_results || 0 }}</div>
           </div>
-          <div v-if="traderStats.win_rate" class="bg-trading-card rounded-lg p-4 border border-trading-border">
-            <div class="text-sm text-gray-400">Win Rate</div>
-            <div class="text-2xl font-bold text-trading-green">{{ traderStats.win_rate }}%</div>
+          
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Win Rate</div>
+            <div class="text-2xl font-bold text-trading-green">
+              {{ traderStats.win_rate || 0 }}%
+            </div>
           </div>
-          <div v-if="traderStats.avg_profit_pct" class="bg-trading-card rounded-lg p-4 border border-trading-border">
-            <div class="text-sm text-gray-400">Средняя прибыль</div>
-            <div 
-              :class="traderStats.avg_profit_pct > 0 ? 'text-trading-green' : 'text-trading-red'"
-              class="text-2xl font-bold"
-            >
-              {{ traderStats.avg_profit_pct > 0 ? '+' : '' }}{{ traderStats.avg_profit_pct }}%
+          
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Средняя прибыль</div>
+            <div class="text-2xl font-bold" :class="traderStats.avg_profit_pct > 0 ? 'text-trading-green' : 'text-trading-red'">
+              {{ traderStats.avg_profit_pct > 0 ? '+' : '' }}{{ traderStats.avg_profit_pct || 0 }}%
             </div>
           </div>
         </div>
 
-        <!-- Временные данные -->
-        <div v-if="traderStats.first_signal_at || traderStats.last_signal_at" class="bg-trading-card rounded-lg p-4 border border-trading-border">
-          <h3 class="text-lg font-semibold mb-4">📅 Временная информация</h3>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div v-if="traderStats.first_signal_at">
-              <div class="text-sm text-gray-400">Первый сигнал</div>
-              <div class="font-semibold">{{ formatDate(traderStats.first_signal_at) }}</div>
-            </div>
-            <div v-if="traderStats.last_signal_at">
-              <div class="text-sm text-gray-400">Последний сигнал</div>
-              <div class="font-semibold">{{ formatDate(traderStats.last_signal_at) }}</div>
+        <!-- Топ тикеры -->
+        <div v-if="traderStats.top_tickers && traderStats.top_tickers.length > 0" class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <h3 class="font-semibold mb-4">📊 Топ тикеры</h3>
+          <div class="space-y-2">
+            <div 
+              v-for="item in traderStats.top_tickers" 
+              :key="item.ticker"
+              class="flex items-center justify-between p-2 bg-trading-bg rounded hover:bg-gray-800 transition-colors"
+            >
+              <span class="font-mono">{{ item.ticker }}</span>
+              <span class="text-gray-400">{{ item.count }} сигналов</span>
             </div>
           </div>
         </div>
 
-        <!-- Тикеры -->
-        <div class="bg-trading-card rounded-lg p-4 border border-trading-border">
-          <h3 class="text-lg font-semibold mb-4">📊 Инструменты</h3>
-          <div v-if="traderTickers.length === 0" class="text-gray-400">
-            Нет данных об инструментах
-          </div>
-          <div v-else class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+        <!-- Направления -->
+        <div v-if="traderStats.by_direction" class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <h3 class="font-semibold mb-4">📈 По направлениям</h3>
+          <div class="space-y-2">
             <div 
-              v-for="ticker in traderTickers" 
-              :key="ticker.ticker"
-              @click="$router.push(`/signals-chart/${ticker.ticker}`)"
-              class="bg-trading-bg p-3 rounded border border-trading-border hover:border-trading-green cursor-pointer transition-colors"
+              v-for="(count, direction) in traderStats.by_direction" 
+              :key="direction"
+              class="flex items-center justify-between p-2 bg-trading-bg rounded"
             >
-              <div class="font-semibold">{{ ticker.ticker }}</div>
-              <div class="text-sm text-gray-400">{{ ticker.count }} сигналов</div>
+              <span class="capitalize">{{ direction }}</span>
+              <span class="text-gray-400">{{ count }}</span>
             </div>
           </div>
         </div>
@@ -177,14 +166,20 @@
           <div v-if="traderSignals.length === 0" class="text-gray-400">
             Нет сигналов для отображения
           </div>
-          <div v-else class="space-y-3">
-            <!-- Используем новый компонент SignalCard -->
-            <SignalCard 
-              v-for="signal in traderSignals.slice(0, 10)" 
-              :key="signal.id"
-              :signal="signal"
-              @click="onSignalClick"
-            />
+          <div v-else class="p-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div 
+                v-for="signal in traderSignals.slice(0, 12)" 
+                :key="signal.id"
+                @click="onSignalClick(signal)"
+                class="cursor-pointer"
+              >
+                <SignalCard 
+                  :signal="signal"
+                  :show-details="false"
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -194,14 +189,13 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import tradingAPI from '../services/api.js'
 import SignalCard from '../components/SignalCard.vue'
 
-// Данные
 const route = useRoute()
+const router = useRouter()
 
-// Используем обычную ref вместо computed для лучшего контроля
 const currentTraderId = ref(route.params.id)
 
 const isLoading = ref(false)
@@ -211,28 +205,21 @@ const error = ref(null)
 const traderStats = ref(null)
 const traderSignals = ref([])
 const tradersList = ref([])
-const traderTickers = ref([])
 
-// Отслеживаем изменения в роуте
 watch(() => route.params.id, (newId) => {
   console.log('🔄 Route changed to:', newId)
   currentTraderId.value = newId
   
   if (newId) {
-    // Сбрасываем предыдущие данные
     traderStats.value = null
     traderSignals.value = []
-    traderTickers.value = []
     error.value = null
-    
-    // Загружаем новые данные
     loadTraderData()
   } else {
     loadTradersList()
   }
 }, { immediate: false })
 
-// Методы
 function formatDate(dateString) {
   return new Date(dateString).toLocaleDateString('ru-RU')
 }
@@ -262,22 +249,18 @@ async function loadTraderData() {
   error.value = null
   
   try {
-    // Загружаем статистику трейдера
     console.log('📈 Fetching trader stats...')
-    const stats = await tradingAPI.getTraderStats(currentTraderId.value)
+    const stats = await tradingAPI.getTraderStats(currentTraderId.value, 30)
     console.log('📊 Raw trader stats response:', stats)
     traderStats.value = stats
     console.log('✅ Trader stats loaded:', stats)
     
-    // Загружаем сигналы трейдера
     console.log('🎯 Fetching trader signals...')
     const signalsResponse = await tradingAPI.getTraderSignals(currentTraderId.value, {
-      ticker: null,  // Явно передаём null, если нет фильтра по тикеру
-      limit: 50      // Ограничиваем до 50 сигналов
+      days_back: 90,
+      limit: 50
     })
-    console.log('📊 Raw signals response:', signalsResponse)
     
-    // Проверяем структуру ответа
     let signalsArray = []
     if (Array.isArray(signalsResponse)) {
       signalsArray = signalsResponse
@@ -285,34 +268,15 @@ async function loadTraderData() {
       signalsArray = signalsResponse.signals
     } else if (signalsResponse && signalsResponse.data && Array.isArray(signalsResponse.data)) {
       signalsArray = signalsResponse.data
-    } else {
-      console.warn('⚠️ Unexpected signals response structure:', signalsResponse)
     }
     
     traderSignals.value = signalsArray
-    console.log('✅ Trader signals processed:', traderSignals.value.length, traderSignals.value)
+    console.log('✅ Trader signals loaded:', signalsArray.length)
     
-    // Группируем по тикерам
-    const tickerCounts = {}
-    traderSignals.value.forEach(signal => {
-      if (signal && signal.ticker) {
-        if (!tickerCounts[signal.ticker]) {
-          tickerCounts[signal.ticker] = 0
-        }
-        tickerCounts[signal.ticker]++
-      }
-    })
-    
-    traderTickers.value = Object.entries(tickerCounts)
-      .map(([ticker, count]) => ({ ticker, count }))
-      .sort((a, b) => b.count - a.count)
-    
-    console.log('✅ Trader tickers processed:', traderTickers.value)
-      
   } catch (err) {
     console.error('❌ Error loading trader data:', err)
-    console.error('❌ Error details:', err.response?.data || err)
-    error.value = err.message
+    console.error('❌ Error details:', err)
+    error.value = `Ошибка загрузки данных: ${err.message}`
   } finally {
     isLoading.value = false
   }
@@ -322,8 +286,8 @@ async function loadMoreSignals() {
   try {
     console.log('📈 Loading more signals...')
     const signalsResponse = await tradingAPI.getTraderSignals(currentTraderId.value, {
-      ticker: null,  // Явно передаём null
-      limit: 100     // Увеличиваем лимит для "Показать больше"
+      ticker: null,
+      limit: 100
     })
     let signalsArray = []
     if (Array.isArray(signalsResponse)) {
@@ -332,11 +296,8 @@ async function loadMoreSignals() {
       signalsArray = signalsResponse.signals
     } else if (signalsResponse && signalsResponse.data && Array.isArray(signalsResponse.data)) {
       signalsArray = signalsResponse.data
-    } else {
-      console.warn('⚠️ Unexpected signals response structure:', signalsResponse)
     }
     
-    // Добавляем новые сигналы к существующим
     traderSignals.value = [...traderSignals.value, ...signalsArray]
     console.log('✅ More signals loaded:', traderSignals.value.length)
   } catch (err) {
@@ -347,10 +308,8 @@ async function loadMoreSignals() {
 
 function onSignalClick(signal) {
   console.log('🎯 Signal clicked:', signal)
-  // Можно добавить логику для открытия детального просмотра сигнала
 }
 
-// Lifecycle
 onMounted(async () => {
   console.log('🚀 TraderProfile mounted, route params:', route.params)
   
@@ -361,3 +320,9 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+.transition-transform {
+  transition: transform 0.2s ease-in-out;
+}
+</style>

@@ -1,3 +1,57 @@
+=== EXPORT PART 8/10 ===
+
+=== ПРОДОЛЖЕНИЕ С ПРЕДЫДУЩЕГО ФАЙЛА ===
+
+    'ticker': '🎯 Ticker',
+    'direction_long': '📈 Long',
+    'direction_short': '📉 Short',
+    'operation_exit': '🚪 Exit',
+    'trading_keyword': '🔑 Keyword',
+    'author': '👤 Author',
+    'price_target': '🎯 Target',
+    'price_stop': '🛑 Stop',
+    'price_take': '💰 Take',
+    'garbage': '🗑️ Garbage'
+  }
+  return labels[category] || category
+}
+
+function getCategoryColor(category) {
+  const colors = {
+    'ticker': 'bg-blue-600 text-white',
+    'direction_long': 'bg-green-600 text-white',
+    'direction_short': 'bg-red-600 text-white',
+    'operation_exit': 'bg-purple-600 text-white',
+    'trading_keyword': 'bg-yellow-600 text-white',
+    'author': 'bg-pink-600 text-white',
+    'price_target': 'bg-cyan-600 text-white',
+    'price_stop': 'bg-orange-600 text-white',
+    'price_take': 'bg-emerald-600 text-white',
+    'garbage': 'bg-gray-600 text-white'
+  }
+  return colors[category] || 'bg-gray-600 text-white'
+}
+
+function formatDate(dateString) {
+  if (!dateString) return ''
+  return new Date(dateString).toLocaleString('ru-RU')
+}
+
+// Lifecycle
+onMounted(() => {
+  loadPatterns()
+})
+</script>
+
+<style scoped>
+input[type="range"] {
+  @apply accent-trading-green;
+}
+</style>
+
+================================================================================
+File: frontend/src/views/SignalsChart.vue
+================================================================================
 <template>
   <div class="min-h-screen bg-trading-bg text-white">
     <div class="max-w-7xl mx-auto p-4">
@@ -916,3 +970,707 @@ watch(() => signalsDays.value, (newDays) => {
   }
 }
 </style>
+
+================================================================================
+File: frontend/src/views/TraderProfile.vue
+================================================================================
+<template>
+  <div class="min-h-screen bg-trading-bg text-white p-4">
+    <!-- Список всех трейдеров -->
+    <div v-if="!currentTraderId">
+      <div class="mb-6">
+        <h1 class="text-2xl font-bold">👥 Все трейдеры</h1>
+        <p class="text-gray-400">Выберите трейдера для просмотра профиля</p>
+      </div>
+
+      <!-- Загрузка списка -->
+      <div v-if="isLoadingList" class="flex items-center justify-center h-64">
+        <div class="text-center">
+          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-trading-green mx-auto mb-4"></div>
+          <p>Загрузка трейдеров...</p>
+        </div>
+      </div>
+
+      <!-- Список трейдеров -->
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div 
+          v-for="trader in tradersList" 
+          :key="trader.id"
+          @click="$router.push(`/trader/${trader.id}`)"
+          class="bg-trading-card rounded-lg border border-trading-border p-4 cursor-pointer hover:border-trading-green transition-colors"
+        >
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold">{{ trader.name }}</h3>
+            <div :class="trader.is_active ? 'text-trading-green' : 'text-gray-400'" class="text-sm">
+              {{ trader.is_active ? '🟢 Активен' : '⚪ Неактивен' }}
+            </div>
+          </div>
+          
+          <div class="space-y-2 text-sm">
+            <div class="flex justify-between">
+              <span class="text-gray-400">Сигналов:</span>
+              <span>{{ trader.total_signals || 0 }}</span>
+            </div>
+            <div v-if="trader.win_rate" class="flex justify-between">
+              <span class="text-gray-400">Win Rate:</span>
+              <span class="text-trading-green">{{ trader.win_rate }}%</span>
+            </div>
+            <div v-if="trader.avg_profit_pct" class="flex justify-between">
+              <span class="text-gray-400">Средняя прибыль:</span>
+              <span :class="trader.avg_profit_pct > 0 ? 'text-trading-green' : 'text-trading-red'">
+                {{ trader.avg_profit_pct > 0 ? '+' : '' }}{{ trader.avg_profit_pct }}%
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Профиль конкретного трейдера -->
+    <div v-else>
+      <!-- Навигация назад -->
+      <div class="mb-6">
+        <button 
+          @click="$router.push('/traders')"
+          class="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-4"
+        >
+          ← Назад к списку трейдеров
+        </button>
+        
+        <!-- Заголовок с именем трейдера -->
+        <div v-if="traderStats">
+          <h1 class="text-2xl font-bold">👤 {{ traderStats.trader_name || 'Трейдер' }}</h1>
+          <div class="flex items-center gap-4 text-gray-400 mt-2">
+            <span>ID: {{ traderStats.trader_id }}</span>
+          </div>
+        </div>
+        <div v-else-if="!isLoading">
+          <h1 class="text-2xl font-bold text-gray-400">👤 Трейдер не найден</h1>
+        </div>
+      </div>
+
+      <!-- Загрузка -->
+      <div v-if="isLoading" class="flex items-center justify-center h-64">
+        <div class="text-center">
+          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-trading-green mx-auto mb-4"></div>
+          <p>Загрузка данных...</p>
+        </div>
+      </div>
+
+      <!-- Ошибка -->
+      <div v-else-if="error" class="bg-red-900/20 border border-red-500 rounded-lg p-4 text-center">
+        <p class="text-red-400">{{ error }}</p>
+        <button 
+          @click="loadTraderData"
+          class="mt-4 px-4 py-2 bg-trading-green hover:bg-green-600 text-black rounded-md transition-colors"
+        >
+          🔄 Попробовать снова
+        </button>
+      </div>
+
+      <!-- Данные трейдера -->
+      <div v-else-if="traderStats" class="space-y-6">
+        <!-- Статистика -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Всего сигналов</div>
+            <div class="text-2xl font-bold">{{ traderStats.total_signals || 0 }}</div>
+          </div>
+          
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Закрытых сделок</div>
+            <div class="text-2xl font-bold">{{ traderStats.closed_results || 0 }}</div>
+          </div>
+          
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Win Rate</div>
+            <div class="text-2xl font-bold text-trading-green">
+              {{ traderStats.win_rate || 0 }}%
+            </div>
+          </div>
+          
+          <div class="bg-trading-card rounded-lg border border-trading-border p-4">
+            <div class="text-gray-400 text-sm mb-1">Средняя прибыль</div>
+            <div class="text-2xl font-bold" :class="traderStats.avg_profit_pct > 0 ? 'text-trading-green' : 'text-trading-red'">
+              {{ traderStats.avg_profit_pct > 0 ? '+' : '' }}{{ traderStats.avg_profit_pct || 0 }}%
+            </div>
+          </div>
+        </div>
+
+        <!-- Топ тикеры -->
+        <div v-if="traderStats.top_tickers && traderStats.top_tickers.length > 0" class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <h3 class="font-semibold mb-4">📊 Топ тикеры</h3>
+          <div class="space-y-2">
+            <div 
+              v-for="item in traderStats.top_tickers" 
+              :key="item.ticker"
+              class="flex items-center justify-between p-2 bg-trading-bg rounded hover:bg-gray-800 transition-colors"
+            >
+              <span class="font-mono">{{ item.ticker }}</span>
+              <span class="text-gray-400">{{ item.count }} сигналов</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Направления -->
+        <div v-if="traderStats.by_direction" class="bg-trading-card rounded-lg border border-trading-border p-4">
+          <h3 class="font-semibold mb-4">📈 По направлениям</h3>
+          <div class="space-y-2">
+            <div 
+              v-for="(count, direction) in traderStats.by_direction" 
+              :key="direction"
+              class="flex items-center justify-between p-2 bg-trading-bg rounded"
+            >
+              <span class="capitalize">{{ direction }}</span>
+              <span class="text-gray-400">{{ count }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Последние сигналы -->
+        <div class="bg-trading-card rounded-lg p-4 border border-trading-border">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold">🎯 Последние сигналы</h3>
+            <button 
+              @click="loadMoreSignals"
+              class="text-trading-green hover:text-opacity-80 transition-colors text-sm"
+            >
+              Показать больше
+            </button>
+          </div>
+          
+          <div v-if="traderSignals.length === 0" class="text-gray-400">
+            Нет сигналов для отображения
+          </div>
+          <div v-else class="p-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div 
+                v-for="signal in traderSignals.slice(0, 12)" 
+                :key="signal.id"
+                @click="onSignalClick(signal)"
+                class="cursor-pointer"
+              >
+                <SignalCard 
+                  :signal="signal"
+                  :show-details="false"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import tradingAPI from '../services/api.js'
+import SignalCard from '../components/SignalCard.vue'
+
+const route = useRoute()
+const router = useRouter()
+
+const currentTraderId = ref(route.params.id)
+
+const isLoading = ref(false)
+const isLoadingList = ref(false)
+const error = ref(null)
+
+const traderStats = ref(null)
+const traderSignals = ref([])
+const tradersList = ref([])
+
+watch(() => route.params.id, (newId) => {
+  console.log('🔄 Route changed to:', newId)
+  currentTraderId.value = newId
+  
+  if (newId) {
+    traderStats.value = null
+    traderSignals.value = []
+    error.value = null
+    loadTraderData()
+  } else {
+    loadTradersList()
+  }
+}, { immediate: false })
+
+function formatDate(dateString) {
+  return new Date(dateString).toLocaleDateString('ru-RU')
+}
+
+async function loadTradersList() {
+  console.log('📋 Loading traders list...')
+  isLoadingList.value = true
+  try {
+    const response = await tradingAPI.getTraders()
+    tradersList.value = response
+    console.log('✅ Loaded traders:', response.length)
+  } catch (err) {
+    console.error('❌ Error loading traders list:', err)
+  } finally {
+    isLoadingList.value = false
+  }
+}
+
+async function loadTraderData() {
+  if (!currentTraderId.value) {
+    console.log('⚠️ No trader ID provided')
+    return
+  }
+  
+  console.log('📊 Loading trader data for ID:', currentTraderId.value)
+  isLoading.value = true
+  error.value = null
+  
+  try {
+    console.log('📈 Fetching trader stats...')
+    const stats = await tradingAPI.getTraderStats(currentTraderId.value, 30)
+    console.log('📊 Raw trader stats response:', stats)
+    traderStats.value = stats
+    console.log('✅ Trader stats loaded:', stats)
+    
+    console.log('🎯 Fetching trader signals...')
+    const signalsResponse = await tradingAPI.getTraderSignals(currentTraderId.value, {
+      days_back: 90,
+      limit: 50
+    })
+    
+    let signalsArray = []
+    if (Array.isArray(signalsResponse)) {
+      signalsArray = signalsResponse
+    } else if (signalsResponse && Array.isArray(signalsResponse.signals)) {
+      signalsArray = signalsResponse.signals
+    } else if (signalsResponse && signalsResponse.data && Array.isArray(signalsResponse.data)) {
+      signalsArray = signalsResponse.data
+    }
+    
+    traderSignals.value = signalsArray
+    console.log('✅ Trader signals loaded:', signalsArray.length)
+    
+  } catch (err) {
+    console.error('❌ Error loading trader data:', err)
+    console.error('❌ Error details:', err)
+    error.value = `Ошибка загрузки данных: ${err.message}`
+  } finally {
+    isLoading.value = false
+  }
+}
+
+async function loadMoreSignals() {
+  try {
+    console.log('📈 Loading more signals...')
+    const signalsResponse = await tradingAPI.getTraderSignals(currentTraderId.value, {
+      ticker: null,
+      limit: 100
+    })
+    let signalsArray = []
+    if (Array.isArray(signalsResponse)) {
+      signalsArray = signalsResponse
+    } else if (signalsResponse && Array.isArray(signalsResponse.signals)) {
+      signalsArray = signalsResponse.signals
+    } else if (signalsResponse && signalsResponse.data && Array.isArray(signalsResponse.data)) {
+      signalsArray = signalsResponse.data
+    }
+    
+    traderSignals.value = [...traderSignals.value, ...signalsArray]
+    console.log('✅ More signals loaded:', traderSignals.value.length)
+  } catch (err) {
+    console.error('❌ Error loading more signals:', err)
+    error.value = `Ошибка загрузки дополнительных сигналов: ${err.message}`
+  }
+}
+
+function onSignalClick(signal) {
+  console.log('🎯 Signal clicked:', signal)
+}
+
+onMounted(async () => {
+  console.log('🚀 TraderProfile mounted, route params:', route.params)
+  
+  if (currentTraderId.value) {
+    await loadTraderData()
+  } else {
+    await loadTradersList()
+  }
+})
+</script>
+
+<style scoped>
+.transition-transform {
+  transition: transform 0.2s ease-in-out;
+}
+</style>
+
+================================================================================
+File: frontend/src/views/TradingDashboard.vue
+================================================================================
+<!-- frontend/src/views/TradingDashboard.vue - ОБНОВЛЕННАЯ ВЕРСИЯ -->
+<template>
+  <div class="min-h-screen bg-trading-bg text-white">
+    <div class="max-w-7xl mx-auto p-4">
+      
+      <!-- Заголовок -->
+      <div class="mb-8">
+        <h1 class="text-3xl font-bold mb-2">📊 Торговый Терминал</h1>
+        <p class="text-gray-400">Анализ торговых сигналов и мониторинг результатов</p>
+      </div>
+
+      <!-- Быстрые ссылки -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <!-- График с сигналами -->
+        <router-link 
+          to="/signals-chart"
+          class="bg-trading-card rounded-lg border border-trading-border p-6 hover:border-trading-green transition-colors cursor-pointer group"
+        >
+          <div class="text-4xl mb-4 group-hover:scale-110 transition-transform">📈</div>
+          <h3 class="text-xl font-semibold mb-2">График с сигналами</h3>
+          <p class="text-gray-400">Просматривайте торговые сигналы на графике свечей</p>
+        </router-link>
+
+        <!-- Чистый график -->
+        <router-link 
+          to="/clean-chart"
+          class="bg-trading-card rounded-lg border border-trading-border p-6 hover:border-trading-green transition-colors cursor-pointer group"
+        >
+          <div class="text-4xl mb-4 group-hover:scale-110 transition-transform">📊</div>
+          <h3 class="text-xl font-semibold mb-2">Чистый график</h3>
+          <p class="text-gray-400">График свечей без торговых сигналов</p>
+        </router-link>
+
+        <!-- Трейдеры -->
+        <router-link 
+          to="/traders"
+          class="bg-trading-card rounded-lg border border-trading-border p-6 hover:border-trading-green transition-colors cursor-pointer group"
+        >
+          <div class="text-4xl mb-4 group-hover:scale-110 transition-transform">👥</div>
+          <h3 class="text-xl font-semibold mb-2">Трейдеры</h3>
+          <p class="text-gray-400">Анализ эффективности трейдеров и их сигналов</p>
+        </router-link>
+
+        <!-- Статистика -->
+        <div class="bg-trading-card rounded-lg border border-trading-border p-6">
+          <div class="text-4xl mb-4">📊</div>
+          <h3 class="text-xl font-semibold mb-2">Статистика</h3>
+          <p class="text-gray-400">Общая статистика системы и производительность</p>
+        </div>
+      </div>
+
+      <!-- Дополнительная информация -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Быстрый доступ -->
+        <div class="bg-trading-card rounded-lg border border-trading-border p-6">
+          <h3 class="text-xl font-semibold mb-4">🚀 Быстрый старт</h3>
+          <div class="space-y-3">
+            <div class="flex items-center justify-between p-3 bg-trading-bg border border-trading-border rounded">
+              <div>
+                <div class="font-semibold">График с сигналами</div>
+                <div class="text-sm text-gray-400">Анализ сигналов на графике</div>
+              </div>
+              <router-link 
+                to="/signals-chart" 
+                class="px-3 py-1 bg-trading-green text-black rounded hover:bg-opacity-80 transition-colors text-sm"
+              >
+                Открыть
+              </router-link>
+            </div>
+            
+            <div class="flex items-center justify-between p-3 bg-trading-bg border border-trading-border rounded">
+              <div>
+                <div class="font-semibold">Чистый график</div>
+                <div class="text-sm text-gray-400">Только свечи без сигналов</div>
+              </div>
+              <router-link 
+                to="/clean-chart" 
+                class="px-3 py-1 bg-trading-green text-black rounded hover:bg-opacity-80 transition-colors text-sm"
+              >
+                Открыть
+              </router-link>
+            </div>
+            
+            <div class="flex items-center justify-between p-3 bg-trading-bg border border-trading-border rounded">
+              <div>
+                <div class="font-semibold">Трейдеры</div>
+                <div class="text-sm text-gray-400">Анализ эффективности</div>
+              </div>
+              <router-link 
+                to="/traders" 
+                class="px-3 py-1 bg-trading-green text-black rounded hover:bg-opacity-80 transition-colors text-sm"
+              >
+                Открыть
+              </router-link>
+            </div>
+          </div>
+        </div>
+
+        <!-- Система -->
+        <div class="bg-trading-card rounded-lg border border-trading-border p-6">
+          <h3 class="text-xl font-semibold mb-4">⚙️ Система</h3>
+          <div class="space-y-4">
+            <div class="flex justify-between items-center">
+              <span class="text-gray-400">Статус системы</span>
+              <span class="text-trading-green">🟢 Активна</span>
+            </div>
+            
+            <div class="flex justify-between items-center">
+              <span class="text-gray-400">База данных</span>
+              <span class="text-trading-green">🟢 Подключена</span>
+            </div>
+            
+            <div class="flex justify-between items-center">
+              <span class="text-gray-400">API Tinkoff</span>
+              <span class="text-trading-green">🟢 Работает</span>
+            </div>
+            
+            <div class="flex justify-between items-center">
+              <span class="text-gray-400">Парсинг сигналов</span>
+              <span class="text-trading-green">🟢 Активен</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Футер с информацией -->
+      <div class="mt-12 text-center text-gray-500 text-sm">
+        <p>Trader Tracker v2.0 - Система анализа торговых сигналов</p>
+        <p class="mt-1">Разработано для автоматизации торговых решений</p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+// Логика компонента (если нужна)
+</script>
+
+<style scoped>
+/* Дополнительные стили */
+.transition-transform {
+  transition: transform 0.2s ease-in-out;
+}
+</style>
+
+================================================================================
+File: frontend/src/components/AppNavigation.vue
+================================================================================
+<!-- frontend/src/components/AppNavigation.vue - ОБНОВЛЕННАЯ ВЕРСИЯ -->
+<template>
+  <nav class="bg-trading-card border-b border-trading-border">
+    <div class="max-w-7xl mx-auto px-4">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center">
+          <router-link to="/" class="flex items-center gap-2 text-xl font-bold text-white hover:text-trading-green transition-colors">
+            📊 Trader Tracker
+          </router-link>
+        </div>
+
+        <div class="hidden md:flex items-center space-x-6">
+          <router-link 
+            to="/" 
+            :class="$route.name === 'Dashboard' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            🏠 Дашборд
+          </router-link>
+
+          <router-link 
+            to="/data-management" 
+            :class="$route.name === 'DataManagement' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            📊 Управление
+          </router-link>
+
+          <router-link 
+            to="/signals" 
+            :class="$route.name === 'AllSignals' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            🎯 Все сигналы
+          </router-link>
+          
+          <router-link 
+            to="/consensus" 
+            :class="$route.name === 'Consensus' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="px-3 py-2 rounded-md text-sm font-medium transition-colors"
+          >
+            🔥 Консенсус
+          </router-link>
+
+          <router-link 
+            to="/signals-chart" 
+            :class="$route.name === 'SignalsChart' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            📈 График сигналов
+          </router-link>
+          
+          <router-link 
+            to="/clean-chart" 
+            :class="$route.name === 'CleanChart' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            📊 Чистый график
+          </router-link>
+          
+          <router-link 
+            to="/traders" 
+            :class="$route.name === 'TraderProfile' || $route.name === 'TradersOverview' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            👥 Трейдеры
+          </router-link>
+          
+          <router-link 
+            to="/patterns" 
+            :class="$route.name === 'PatternsManager' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            🎯 Паттерны
+          </router-link>
+
+          <router-link 
+            to="/diagnostics" 
+            :class="$route.name === 'DataDiagnostics' ? 'text-trading-green' : 'text-gray-300 hover:text-white'"
+            class="transition-colors"
+          >
+            🔍 Диагностика
+          </router-link>
+        </div>
+
+        <!-- Мобильное меню -->
+        <div class="md:hidden">
+          <button 
+            @click="isMobileMenuOpen = !isMobileMenuOpen"
+            class="text-gray-300 hover:text-white focus:outline-none focus:text-white transition-colors"
+          >
+            <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Мобильное меню -->
+      <div v-if="isMobileMenuOpen" class="md:hidden">
+        <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3 border-t border-trading-border">
+          <router-link 
+            to="/" 
+            @click="isMobileMenuOpen = false"
+            :class="$route.name === 'Dashboard' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="block px-3 py-2 rounded-md text-base font-medium transition-colors"
+          >
+            🏠 Дашборд
+          </router-link>
+          
+          <router-link 
+            to="/signals" 
+            @click="isMobileMenuOpen = false"
+            :class="$route.name === 'AllSignals' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="block px-3 py-2 rounded-md text-base font-medium transition-colors"
+          >
+            🎯 Все сигналы
+          </router-link>
+          
+          <router-link 
+            to="/signals-chart" 
+            @click="isMobileMenuOpen = false"
+            :class="$route.name === 'SignalsChart' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="block px-3 py-2 rounded-md text-base font-medium transition-colors"
+          >
+            📈 График сигналов
+          </router-link>
+
+          <router-link 
+            to="/clean-chart" 
+            @click="isMobileMenuOpen = false"
+            :class="$route.name === 'CleanChart' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="block px-3 py-2 rounded-md text-base font-medium transition-colors"
+          >
+            📊 Чистый график
+          </router-link>
+          
+          <router-link 
+            to="/traders" 
+            @click="isMobileMenuOpen = false"
+            :class="$route.name === 'TraderProfile' || $route.name === 'TradersOverview' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="block px-3 py-2 rounded-md text-base font-medium transition-colors"
+          >
+            👥 Трейдеры
+          </router-link>
+
+          <router-link 
+            to="/diagnostics" 
+            @click="isMobileMenuOpen = false"
+            :class="$route.name === 'DataDiagnostics' ? 'text-trading-green bg-trading-bg' : 'text-gray-300 hover:text-white hover:bg-trading-bg'"
+            class="block px-3 py-2 rounded-md text-base font-medium transition-colors"
+          >
+            🔍 Диагностика
+          </router-link>
+
+        </div>
+      </div>
+    </div>
+  </nav>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+
+const isMobileMenuOpen = ref(false)
+</script>
+
+<style scoped>
+.router-link-active {
+  color: #00d4aa;
+}
+
+.transition-colors {
+  transition: color 0.2s ease-in-out;
+}
+</style>
+
+================================================================================
+File: frontend/src/components/DataManagement.vue
+================================================================================
+<!-- frontend/src/components/DataManagement.vue -->
+<template>
+  <div class="data-management bg-trading-card rounded-lg border border-trading-border p-6">
+    <h2 class="text-2xl font-bold mb-6">🛠️ Управление данными</h2>
+    
+    <!-- Статус системы -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div class="bg-trading-bg rounded-lg p-4 border border-trading-border">
+        <h3 class="font-semibold mb-2">📊 Инструменты</h3>
+        <div class="text-2xl font-bold text-blue-400">{{ systemStats.total_instruments || 0 }}</div>
+        <div class="text-sm text-gray-400">
+          С данными: {{ systemStats.instruments_with_data || 0 }}
+        </div>
+      </div>
+      
+      <div class="bg-trading-bg rounded-lg p-4 border border-trading-border">
+        <h3 class="font-semibold mb-2">🕯️ Свечи</h3>
+        <div class="text-2xl font-bold text-green-400">{{ formatNumber(systemStats.total_candles) }}</div>
+        <div class="text-sm text-gray-400">За все время</div>
+      </div>
+      
+      <div class="bg-trading-bg rounded-lg p-4 border border-trading-border">
+        <h3 class="font-semibold mb-2">🎯 Сигналы</h3>
+        <div class="text-2xl font-bold text-yellow-400">{{ systemStats.total_signals || 0 }}</div>
+        <div class="text-sm text-gray-400">
+          Активных: {{ systemStats.active_signals || 0 }}
+        </div>
+      </div>
+    </div>
+    
+    <!-- Панель действий -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      <!-- Быстрые действия -->
+      <div class="space-y-4">
+        <h3 class="text-lg font-semibold">⚡ Быстрые действия</h3>
+        
+        <button 
+
+=== КОД ОБРЫВАЕТСЯ. ПРОДОЛЖЕНИЕ В СЛЕДУЮЩЕМ ФАЙЛЕ ===
+

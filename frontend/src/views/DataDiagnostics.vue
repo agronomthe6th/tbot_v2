@@ -121,7 +121,7 @@
           </div>
           
           <!-- Кнопка загрузки данных -->
-          <div v-if="analysisResult.coverage_percentage < 80" class="mt-4">
+          <div v-if="analysisResult.coverage_percentage < 101" class="mt-4">
             <button 
               @click="loadMissingData"
               :disabled="isLoadingData"
@@ -282,20 +282,24 @@ const coverageColor = computed(() => {
 })
 
 const filteredInstruments = computed(() => {
-  let filtered = allInstruments.value
+  let filtered = allInstruments.value || []
 
   // Фильтр по тексту
   if (instrumentFilter.value) {
     const search = instrumentFilter.value.toLowerCase()
-    filtered = filtered.filter(inst => 
-      inst.ticker.toLowerCase().includes(search) ||
-      inst.name.toLowerCase().includes(search)
-    )
+    filtered = filtered.filter(inst => {
+      if (!inst) return false
+      const ticker = inst.ticker || ''
+      const name = inst.name || ''
+      return ticker.toLowerCase().includes(search) || 
+             name.toLowerCase().includes(search)
+    })
   }
 
   // Фильтр по данным
   if (dataFilter.value !== 'all') {
     filtered = filtered.filter(inst => {
+      if (!inst) return false
       const candles = inst.candles_count || 0
       const coverage = inst.coverage_percentage || 0
       
@@ -336,16 +340,20 @@ async function loadAllInstruments() {
   loadingMessage.value = 'Загружаем список инструментов...'
   
   try {
-    const tickers = await tradingAPI.getAvailableTickers(true)
+    const tickers = await tradingAPI.getAvailableTickers(true, true)
     availableTickers.value = tickers
     
-    // Получаем подробную информацию о каждом инструменте
+    // ✅ Добавь эти логи:
+    console.log('🔍 RAW tickers:', tickers.slice(0, 2))  // первые 2 тикера
+    console.log('🔍 SBER data:', tickers.find(t => t.ticker === 'SBER'))
+    
     allInstruments.value = tickers.map(ticker => ({
       ...ticker,
       coverage_percentage: calculateCoverage(ticker),
       latest_candle: ticker.latest_candle
     }))
     
+    console.log('🔍 SBER after processing:', allInstruments.value.find(t => t.ticker === 'SBER'))
     console.log('✅ Instruments loaded:', allInstruments.value.length)
   } catch (error) {
     console.error('❌ Error loading instruments:', error)
@@ -427,19 +435,18 @@ async function loadMissingData() {
   isLoadingData.value = true
   
   try {
-    // Используем API для загрузки исторических данных
     const response = await tradingAPI.loadHistoricalData(
       selectedTicker.value, 
       selectedPeriod.value, 
-      true // force_reload
+      true
     )
     
     console.log('✅ Historical data loading started:', response)
     alert(`Загрузка данных для ${selectedTicker.value} запущена! Проверьте результат через несколько минут.`)
     
-    // Перезапускаем анализ через 10 секунд
     setTimeout(() => {
       analyzeInstrument()
+      loadAllInstruments()
     }, 10000)
     
   } catch (error) {
@@ -481,13 +488,21 @@ async function refreshAllData() {
   }
 }
 
-// Утилиты
 function calculateCoverage(ticker) {
-  if (!ticker.candles_count) return 0
-  // Примерная оценка покрытия на основе количества свечей
-  // Для 5-минутных свечей за год: ~105,000 свечей
-  const expectedCandles = 105000
-  return Math.min(Math.round((ticker.candles_count / expectedCandles) * 100), 100)
+  if (!ticker.candles_count || !ticker.latest_candle) return 0
+  
+  // Считаем сколько дней назад была последняя свеча
+  const now = Date.now()
+  const lastCandleTime = new Date(ticker.latest_candle).getTime()
+  const daysSinceLastCandle = Math.floor((now - lastCandleTime) / (1000 * 60 * 60 * 24))
+  
+  // Если последняя свеча сегодня или вчера = 100%
+  if (daysSinceLastCandle <= 1) return 100
+  
+  // Каждый день без свечей снижает покрытие на 3%
+  // Через 30 дней = 10%, через 33 дня = 0%
+  const coverage = Math.max(0, 100 - (daysSinceLastCandle * 3))
+  return Math.round(coverage)
 }
 
 function formatDate(dateString) {
