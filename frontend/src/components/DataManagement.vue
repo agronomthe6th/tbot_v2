@@ -28,6 +28,106 @@
       </div>
     </div>
     
+    <!-- Telegram Каналы -->
+    <div class="bg-trading-card rounded-lg border border-trading-border p-6 mb-6">
+      <h3 class="text-xl font-bold mb-4">📢 Telegram Каналы</h3>
+
+      <!-- Форма добавления канала -->
+      <div class="mb-6 p-4 bg-trading-bg rounded-lg border border-trading-border">
+        <h4 class="font-semibold mb-3">➕ Добавить новый канал</h4>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <input
+            v-model="newChannel.channel_id"
+            type="text"
+            placeholder="ID канала (например: -2198949181)"
+            class="p-2 rounded bg-trading-bg border border-trading-border text-white"
+          >
+          <input
+            v-model="newChannel.name"
+            type="text"
+            placeholder="Название канала"
+            class="p-2 rounded bg-trading-bg border border-trading-border text-white"
+          >
+          <input
+            v-model="newChannel.username"
+            type="text"
+            placeholder="Username (опционально)"
+            class="p-2 rounded bg-trading-bg border border-trading-border text-white"
+          >
+          <button
+            @click="addChannel"
+            :disabled="!newChannel.channel_id || !newChannel.name || isLoading"
+            class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-white font-medium"
+          >
+            Добавить канал
+          </button>
+        </div>
+      </div>
+
+      <!-- Список каналов -->
+      <div v-if="telegramChannels.length === 0" class="text-gray-400 text-center py-4">
+        Нет добавленных каналов
+      </div>
+      <div v-else class="space-y-3">
+        <div
+          v-for="channel in telegramChannels"
+          :key="channel.channel_id"
+          class="p-4 bg-trading-bg rounded-lg border border-trading-border"
+        >
+          <div class="flex items-start justify-between">
+            <div class="flex-1">
+              <div class="flex items-center gap-3 mb-2">
+                <h4 class="font-semibold text-lg">{{ channel.name }}</h4>
+                <div
+                  :class="channel.is_enabled ? 'bg-green-600' : 'bg-gray-600'"
+                  class="px-2 py-1 rounded text-xs"
+                >
+                  {{ channel.is_enabled ? '🟢 Активен' : '⚪ Неактивен' }}
+                </div>
+              </div>
+              <div class="text-sm text-gray-400 space-y-1">
+                <div>ID: {{ channel.channel_id }}</div>
+                <div v-if="channel.username">Username: @{{ channel.username }}</div>
+                <div v-if="channel.message_count">Сообщений: {{ channel.message_count }}</div>
+                <div v-if="channel.last_message_id">Последнее сообщение ID: {{ channel.last_message_id }}</div>
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-2 ml-4">
+              <button
+                @click="toggleChannel(channel)"
+                :disabled="isLoading"
+                class="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-xs text-white"
+              >
+                {{ channel.is_enabled ? 'Отключить' : 'Включить' }}
+              </button>
+              <button
+                @click="fetchChannelMessages(channel)"
+                :disabled="isLoading || !channel.is_enabled"
+                class="px-3 py-1 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded text-xs text-white"
+              >
+                Загрузить сообщения
+              </button>
+              <button
+                @click="parseChannel(channel)"
+                :disabled="isLoading"
+                class="px-3 py-1 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 rounded text-xs text-white"
+              >
+                Парсить
+              </button>
+              <button
+                @click="deleteChannel(channel)"
+                :disabled="isLoading"
+                class="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded text-xs text-white"
+              >
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Панель действий -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
       <!-- Быстрые действия -->
@@ -218,6 +318,14 @@ const bulkProgress = ref({
   total: 0
 })
 
+// Telegram каналы
+const telegramChannels = ref([])
+const newChannel = ref({
+  channel_id: '',
+  name: '',
+  username: ''
+})
+
 // Методы
 const loadSystemStats = async () => {
   try {
@@ -383,6 +491,166 @@ const loadSingleInstrument = async (ticker) => {
   }
 }
 
+// Telegram методы
+const loadTelegramChannels = async () => {
+  try {
+    const response = await tradingAPI.getTelegramChannels()
+    telegramChannels.value = response.channels || []
+    console.log('Loaded telegram channels:', telegramChannels.value)
+  } catch (error) {
+    console.error('Error loading telegram channels:', error)
+    lastResult.value = {
+      success: false,
+      message: `Ошибка загрузки каналов: ${error.message}`
+    }
+  }
+}
+
+const addChannel = async () => {
+  if (!newChannel.value.channel_id || !newChannel.value.name) {
+    lastResult.value = {
+      success: false,
+      message: 'ID канала и название обязательны'
+    }
+    return
+  }
+
+  isLoading.value = true
+  loadingStatus.value = 'Добавление канала...'
+
+  try {
+    await tradingAPI.addTelegramChannel({
+      channel_id: newChannel.value.channel_id,
+      name: newChannel.value.name,
+      username: newChannel.value.username || null,
+      enabled: true
+    })
+
+    lastResult.value = {
+      success: true,
+      message: `Канал ${newChannel.value.name} успешно добавлен`
+    }
+
+    // Очищаем форму
+    newChannel.value = {
+      channel_id: '',
+      name: '',
+      username: ''
+    }
+
+    // Перезагружаем список
+    await loadTelegramChannels()
+  } catch (error) {
+    lastResult.value = {
+      success: false,
+      message: `Ошибка добавления канала: ${error.message}`
+    }
+  } finally {
+    isLoading.value = false
+    loadingStatus.value = ''
+  }
+}
+
+const toggleChannel = async (channel) => {
+  isLoading.value = true
+  loadingStatus.value = `${channel.is_enabled ? 'Отключение' : 'Включение'} канала...`
+
+  try {
+    await tradingAPI.toggleTelegramChannel(channel.channel_id, !channel.is_enabled)
+
+    lastResult.value = {
+      success: true,
+      message: `Канал ${channel.name} ${channel.is_enabled ? 'отключен' : 'включен'}`
+    }
+
+    await loadTelegramChannels()
+  } catch (error) {
+    lastResult.value = {
+      success: false,
+      message: `Ошибка переключения канала: ${error.message}`
+    }
+  } finally {
+    isLoading.value = false
+    loadingStatus.value = ''
+  }
+}
+
+const fetchChannelMessages = async (channel) => {
+  isLoading.value = true
+  loadingStatus.value = `Загрузка сообщений из ${channel.name}...`
+
+  try {
+    const result = await tradingAPI.fetchLatestMessages(channel.channel_id, 1000)
+
+    lastResult.value = {
+      success: true,
+      message: `Загружено ${result.messages_collected || 0} сообщений из канала ${channel.name}`,
+      completed: result.messages_collected || 0
+    }
+
+    await loadTelegramChannels()
+  } catch (error) {
+    lastResult.value = {
+      success: false,
+      message: `Ошибка загрузки сообщений: ${error.message}`
+    }
+  } finally {
+    isLoading.value = false
+    loadingStatus.value = ''
+  }
+}
+
+const parseChannel = async (channel) => {
+  isLoading.value = true
+  loadingStatus.value = `Парсинг сообщений канала ${channel.name}...`
+
+  try {
+    const result = await tradingAPI.parseChannelMessages(channel.channel_id)
+
+    lastResult.value = {
+      success: true,
+      message: `Парсинг завершен для канала ${channel.name}. Найдено сигналов: ${result.signals_found || 0}`,
+      completed: result.signals_found || 0
+    }
+  } catch (error) {
+    lastResult.value = {
+      success: false,
+      message: `Ошибка парсинга: ${error.message}`
+    }
+  } finally {
+    isLoading.value = false
+    loadingStatus.value = ''
+  }
+}
+
+const deleteChannel = async (channel) => {
+  if (!confirm(`Вы уверены, что хотите удалить канал "${channel.name}"?`)) {
+    return
+  }
+
+  isLoading.value = true
+  loadingStatus.value = `Удаление канала ${channel.name}...`
+
+  try {
+    await tradingAPI.deleteTelegramChannel(channel.channel_id)
+
+    lastResult.value = {
+      success: true,
+      message: `Канал ${channel.name} успешно удален`
+    }
+
+    await loadTelegramChannels()
+  } catch (error) {
+    lastResult.value = {
+      success: false,
+      message: `Ошибка удаления канала: ${error.message}`
+    }
+  } finally {
+    isLoading.value = false
+    loadingStatus.value = ''
+  }
+}
+
 // Утилиты
 const formatNumber = (num) => {
   if (!num) return '0'
@@ -393,7 +661,8 @@ const formatNumber = (num) => {
 onMounted(async () => {
   await Promise.all([
     loadSystemStats(),
-    loadDataStatus()
+    loadDataStatus(),
+    loadTelegramChannels()
   ])
 })
 </script>

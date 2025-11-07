@@ -580,6 +580,99 @@ export const tradingAPI = {
     }
   },
 
+  async addTelegramChannel(channelData) {
+    try {
+      const { channel_id, name, username, enabled = true } = channelData
+
+      if (!channel_id || !name) {
+        throw new Error('Channel ID and name are required')
+      }
+
+      console.log('🌐 API: Adding Telegram channel:', name)
+
+      const params = {
+        channel_id: parseInt(channel_id),
+        name,
+        enabled
+      }
+
+      if (username) {
+        params.username = username
+      }
+
+      const response = await api.post('/api/telegram/channels', null, { params })
+
+      console.log('✅ API: Telegram channel added:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Add Telegram channel error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to add Telegram channel')
+    }
+  },
+
+  async updateTelegramChannel(channelId, updates) {
+    try {
+      if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
+        throw new Error('Valid channel ID is required')
+      }
+
+      console.log(`🌐 API: Updating Telegram channel ${channelId}`)
+
+      const params = {}
+      if (updates.name !== undefined) params.name = updates.name
+      if (updates.username !== undefined) params.username = updates.username
+      if (updates.enabled !== undefined) params.enabled = updates.enabled
+
+      const response = await api.put(`/api/telegram/channels/${channelId}`, null, { params })
+
+      console.log('✅ API: Telegram channel updated:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Update Telegram channel error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to update Telegram channel')
+    }
+  },
+
+  async deleteTelegramChannel(channelId) {
+    try {
+      if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
+        throw new Error('Valid channel ID is required')
+      }
+
+      console.log(`🌐 API: Deleting Telegram channel ${channelId}`)
+
+      const response = await api.delete(`/api/telegram/channels/${channelId}`)
+
+      console.log('✅ API: Telegram channel deleted:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Delete Telegram channel error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to delete Telegram channel')
+    }
+  },
+
+  async toggleTelegramChannel(channelId, enabled) {
+    try {
+      if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
+        throw new Error('Valid channel ID is required')
+      }
+
+      console.log(`🌐 API: ${enabled ? 'Enabling' : 'Disabling'} Telegram channel ${channelId}`)
+
+      const endpoint = enabled
+        ? `/api/telegram/channel/${channelId}/enable`
+        : `/api/telegram/channel/${channelId}/disable`
+
+      const response = await api.post(endpoint)
+
+      console.log('✅ API: Telegram channel toggled:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Toggle Telegram channel error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to toggle Telegram channel')
+    }
+  },
+
   async fetchLatestMessages(channelId, limit = 1000) {
     // Validate channel ID before making the request
     if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
@@ -604,33 +697,41 @@ export const tradingAPI = {
     }
   },
 
-  async addTelegramChannel(channelData) {
+  async getChannelMessages(channelId, limit = 100, offset = 0) {
     try {
-      const { channel_id, name, username, enabled = true } = channelData
-
-      if (!channel_id || !name) {
-        throw new Error('Channel ID and name are required')
+      if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
+        throw new Error('Valid channel ID is required')
       }
 
-      console.log('🌐 API: Adding Telegram channel:', name)
+      console.log(`🌐 API: Getting messages for channel ${channelId}`)
 
-      const params = {
-        channel_id,
-        name,
-        enabled
-      }
+      const response = await api.get(`/api/telegram/channels/${channelId}/messages`, {
+        params: { limit, offset }
+      })
 
-      if (username) {
-        params.username = username
-      }
-
-      const response = await api.post('/api/telegram/channels', null, { params })
-
-      console.log('✅ API: Telegram channel added:', response.data)
+      console.log(`✅ API: Channel messages retrieved:`, response.data)
       return response.data
     } catch (error) {
-      console.error('❌ API: Add Telegram channel error:', error.response?.data)
-      throw new Error(error.response?.data?.detail || 'Failed to add Telegram channel')
+      console.error(`❌ API: Get channel messages error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to get channel messages')
+    }
+  },
+
+  async parseChannelMessages(channelId) {
+    try {
+      if (!channelId || channelId === 'undefined' || isNaN(parseInt(channelId))) {
+        throw new Error('Valid channel ID is required')
+      }
+
+      console.log(`🌐 API: Parsing messages for channel ${channelId}`)
+
+      const response = await api.post(`/api/telegram/channels/${channelId}/parse`)
+
+      console.log(`✅ API: Channel messages parsed:`, response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Parse channel messages error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to parse channel messages')
     }
   }
 }
