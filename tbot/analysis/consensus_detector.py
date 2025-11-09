@@ -25,20 +25,26 @@ class ConsensusDetector:
     
     def __init__(self, db: Database):
         self.db = db
-        
-        self.default_window_minutes = 30
-        self.default_min_traders = 3
-        self.strict_consensus = True
-        
-        logger.info("✅ ConsensusDetector initialized (MVP mode)")
+
+        # Параметры консенсуса (можно настроить)
+        self.default_window_minutes = 10  # Окно времени для поиска консенсуса
+        self.default_min_traders = 2  # Минимум уникальных трейдеров
+        self.strict_consensus = True  # Все сигналы должны быть в одном направлении
+
+        logger.info(
+            f"✅ ConsensusDetector initialized: "
+            f"window={self.default_window_minutes}min, "
+            f"min_traders={self.default_min_traders}, "
+            f"strict={self.strict_consensus}"
+        )
     
-    async def check_new_signal(self, signal_id: UUID) -> Optional[Dict]:
+    def check_new_signal_sync(self, signal_id: UUID) -> Optional[Dict]:
         """
-        Event-driven проверка: анализируем окно вокруг нового сигнала
-        
+        Синхронная версия проверки консенсуса для интеграции в синхронный код
+
         Args:
             signal_id: UUID нового сигнала
-            
+
         Returns:
             Dict с информацией о консенсусе если найден, иначе None
         """
@@ -47,39 +53,39 @@ class ConsensusDetector:
                 signal = session.query(ParsedSignal).filter(
                     ParsedSignal.id == signal_id
                 ).first()
-                
+
                 if not signal:
                     logger.warning(f"Signal {signal_id} not found")
                     return None
-                
+
                 if signal.signal_type != 'entry':
                     logger.debug(f"Signal {signal_id} is not entry type, skipping")
                     return None
-                
+
                 existing = session.query(ConsensusSignal).filter(
                     ConsensusSignal.signal_id == signal_id
                 ).first()
-                
+
                 if existing:
                     logger.debug(f"Signal {signal_id} already in consensus")
                     return None
-                
+
                 logger.info(f"🔍 Checking consensus for: {signal.ticker} {signal.direction} by {signal.author}")
-                
+
                 consensus_data = self._find_consensus_window(session, signal)
-                
+
                 if consensus_data:
                     consensus_event = self._create_consensus_event(
-                        session, 
-                        signal, 
+                        session,
+                        signal,
                         consensus_data
                     )
-                    
+
                     logger.info(
                         f"🔥 CONSENSUS DETECTED: {consensus_event.ticker} {consensus_event.direction} "
                         f"- {consensus_event.traders_count} traders in {consensus_event.window_minutes}min"
                     )
-                    
+
                     return {
                         'consensus_id': str(consensus_event.id),
                         'ticker': consensus_event.ticker,
@@ -88,12 +94,24 @@ class ConsensusDetector:
                         'window_minutes': consensus_event.window_minutes,
                         'strength': consensus_event.consensus_strength
                     }
-                
+
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error checking signal {signal_id}: {e}", exc_info=True)
             return None
+
+    async def check_new_signal(self, signal_id: UUID) -> Optional[Dict]:
+        """
+        Event-driven проверка: анализируем окно вокруг нового сигнала (async версия)
+
+        Args:
+            signal_id: UUID нового сигнала
+
+        Returns:
+            Dict с информацией о консенсусе если найден, иначе None
+        """
+        return self.check_new_signal_sync(signal_id)
     
     def _find_consensus_window(self, session, signal: ParsedSignal) -> Optional[Dict]:
         """Ищем консенсус в окне вокруг сигнала"""
@@ -192,7 +210,7 @@ class ConsensusDetector:
             price_spread_pct=price_spread,
             consensus_strength=strength,
             status='active',
-            metadata={
+            consensus_metadata={
                 'authors': list(consensus_data['unique_authors']),
                 'trigger_signal_id': str(trigger_signal.id),
                 'total_signals': len(signals)
