@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 from enum import Enum
+from sqlalchemy import and_
 from analysis.consensus_detector import get_consensus_detector
 from analysis.message_parser import MessageParser, MessageParsingService
 from core.database import Database
@@ -1642,6 +1643,244 @@ async def manual_consensus_detection(ticker: Optional[str] = None, hours_back: i
             
     except Exception as e:
         logger.error(f"Manual consensus detection failed: {e}", exc_info=True)
+
+# ===== CONSENSUS RULES ENDPOINTS =====
+
+@app.get("/api/consensus/rules")
+async def get_consensus_rules(
+    active_only: bool = Query(False, description="Только активные правила")
+):
+    """Получить список правил консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            query = session.query(ConsensusRule)
+
+            if active_only:
+                query = query.filter(ConsensusRule.is_active == True)
+
+            rules = query.order_by(ConsensusRule.priority.desc(), ConsensusRule.created_at.desc()).all()
+
+            result = []
+            for rule in rules:
+                result.append({
+                    'id': rule.id,
+                    'name': rule.name,
+                    'description': rule.description,
+                    'is_active': rule.is_active,
+                    'priority': rule.priority,
+                    'min_traders': rule.min_traders,
+                    'window_minutes': rule.window_minutes,
+                    'strict_consensus': rule.strict_consensus,
+                    'ticker_filter': rule.ticker_filter,
+                    'direction_filter': rule.direction_filter,
+                    'min_confidence': rule.min_confidence,
+                    'min_strength': rule.min_strength,
+                    'notification_settings': rule.notification_settings,
+                    'config': rule.config,
+                    'created_at': rule.created_at.isoformat() if rule.created_at else None,
+                    'updated_at': rule.updated_at.isoformat() if rule.updated_at else None,
+                    'created_by': rule.created_by
+                })
+
+            return {
+                'count': len(result),
+                'rules': result
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get consensus rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/consensus/rules")
+async def create_consensus_rule(rule_data: Dict):
+    """Создать новое правило консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            # Проверка на уникальность имени
+            existing = session.query(ConsensusRule).filter(
+                ConsensusRule.name == rule_data['name']
+            ).first()
+
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Rule with name '{rule_data['name']}' already exists")
+
+            rule = ConsensusRule(
+                name=rule_data['name'],
+                description=rule_data.get('description'),
+                is_active=rule_data.get('is_active', True),
+                priority=rule_data.get('priority', 0),
+                min_traders=rule_data.get('min_traders', 2),
+                window_minutes=rule_data.get('window_minutes', 10),
+                strict_consensus=rule_data.get('strict_consensus', True),
+                ticker_filter=rule_data.get('ticker_filter'),
+                direction_filter=rule_data.get('direction_filter'),
+                min_confidence=rule_data.get('min_confidence'),
+                min_strength=rule_data.get('min_strength'),
+                notification_settings=rule_data.get('notification_settings'),
+                config=rule_data.get('config'),
+                created_by=rule_data.get('created_by', 'web_ui')
+            )
+
+            session.add(rule)
+            session.commit()
+
+            logger.info(f"✅ Consensus rule created: {rule.name} (id={rule.id})")
+
+            return {
+                'id': rule.id,
+                'name': rule.name,
+                'message': 'Rule created successfully'
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consensus/rules/{rule_id}")
+async def get_consensus_rule(rule_id: int):
+    """Получить детали правила консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            rule = session.query(ConsensusRule).filter(ConsensusRule.id == rule_id).first()
+
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+            return {
+                'id': rule.id,
+                'name': rule.name,
+                'description': rule.description,
+                'is_active': rule.is_active,
+                'priority': rule.priority,
+                'min_traders': rule.min_traders,
+                'window_minutes': rule.window_minutes,
+                'strict_consensus': rule.strict_consensus,
+                'ticker_filter': rule.ticker_filter,
+                'direction_filter': rule.direction_filter,
+                'min_confidence': rule.min_confidence,
+                'min_strength': rule.min_strength,
+                'notification_settings': rule.notification_settings,
+                'config': rule.config,
+                'created_at': rule.created_at.isoformat() if rule.created_at else None,
+                'updated_at': rule.updated_at.isoformat() if rule.updated_at else None,
+                'created_by': rule.created_by
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/consensus/rules/{rule_id}")
+async def update_consensus_rule(rule_id: int, rule_data: Dict):
+    """Обновить правило консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            rule = session.query(ConsensusRule).filter(ConsensusRule.id == rule_id).first()
+
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+            # Обновляем только переданные поля
+            if 'name' in rule_data and rule_data['name'] != rule.name:
+                # Проверяем уникальность нового имени
+                existing = session.query(ConsensusRule).filter(
+                    ConsensusRule.name == rule_data['name'],
+                    ConsensusRule.id != rule_id
+                ).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail=f"Rule with name '{rule_data['name']}' already exists")
+                rule.name = rule_data['name']
+
+            if 'description' in rule_data:
+                rule.description = rule_data['description']
+            if 'is_active' in rule_data:
+                rule.is_active = rule_data['is_active']
+            if 'priority' in rule_data:
+                rule.priority = rule_data['priority']
+            if 'min_traders' in rule_data:
+                rule.min_traders = rule_data['min_traders']
+            if 'window_minutes' in rule_data:
+                rule.window_minutes = rule_data['window_minutes']
+            if 'strict_consensus' in rule_data:
+                rule.strict_consensus = rule_data['strict_consensus']
+            if 'ticker_filter' in rule_data:
+                rule.ticker_filter = rule_data['ticker_filter']
+            if 'direction_filter' in rule_data:
+                rule.direction_filter = rule_data['direction_filter']
+            if 'min_confidence' in rule_data:
+                rule.min_confidence = rule_data['min_confidence']
+            if 'min_strength' in rule_data:
+                rule.min_strength = rule_data['min_strength']
+            if 'notification_settings' in rule_data:
+                rule.notification_settings = rule_data['notification_settings']
+            if 'config' in rule_data:
+                rule.config = rule_data['config']
+
+            session.commit()
+
+            logger.info(f"✅ Consensus rule updated: {rule.name} (id={rule.id})")
+
+            return {
+                'id': rule.id,
+                'name': rule.name,
+                'message': 'Rule updated successfully'
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/consensus/rules/{rule_id}")
+async def delete_consensus_rule(rule_id: int):
+    """Удалить правило консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            rule = session.query(ConsensusRule).filter(ConsensusRule.id == rule_id).first()
+
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+            rule_name = rule.name
+            session.delete(rule)
+            session.commit()
+
+            logger.info(f"✅ Consensus rule deleted: {rule_name} (id={rule_id})")
+
+            return {
+                'message': f'Rule "{rule_name}" deleted successfully'
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ===== TELEGRAM SCRAPER ENDPOINTS =====
 

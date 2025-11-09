@@ -321,6 +321,46 @@ class ConsensusSignal(Base):
         Index('idx_consensus_signals_signal', 'signal_id'),
     )
 
+class ConsensusRule(Base):
+    """Правила детекции консенсуса"""
+    __tablename__ = 'consensus_rules'
+
+    id = Column(Integer, primary_key=True)
+
+    # Основные параметры
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text)
+    is_active = Column(Boolean, default=True, index=True)
+    priority = Column(Integer, default=0)  # Чем выше, тем приоритетнее
+
+    # Параметры детекции
+    min_traders = Column(Integer, nullable=False, default=2)
+    window_minutes = Column(Integer, nullable=False, default=10)
+    strict_consensus = Column(Boolean, default=True)  # Все сигналы в одном направлении
+
+    # Фильтры (опционально)
+    ticker_filter = Column(String(200))  # Через запятую: SBER,GAZP или NULL для всех
+    direction_filter = Column(String(10))  # long, short или NULL для обоих
+    min_confidence = Column(Integer)  # Минимальная уверенность сигнала (0-100)
+
+    # Критерии силы
+    min_strength = Column(Integer)  # Минимальная сила консенсуса для создания события
+
+    # Метаданные
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_by = Column(String(100))  # Кто создал правило
+
+    # Настройки уведомлений (JSON)
+    notification_settings = Column(JSONB)  # {"telegram": true, "email": false, "webhook_url": "..."}
+
+    # Дополнительная конфигурация (JSON)
+    config = Column(JSONB)  # Для будущих расширений
+
+    __table_args__ = (
+        Index('idx_consensus_rule_active_priority', 'is_active', 'priority'),
+    )
+
 class TelegramChannel(Base):
     """Telegram каналы для мониторинга"""
     __tablename__ = 'telegram_channels'
