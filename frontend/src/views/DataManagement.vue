@@ -1,5 +1,6 @@
 <template>
-  <div class="min-h-screen bg-trading-dark p-6">
+  <div class="data-management-page">
+    <div class="min-h-screen bg-trading-dark p-6">
     <div class="max-w-7xl mx-auto">
       <h1 class="text-3xl font-bold text-white mb-6">📊 Управление данными</h1>
       
@@ -291,19 +292,19 @@
   </div>
 
   <!-- Add Channel Modal -->
-  <div 
-    v-if="showAddChannelModal" 
+  <div
+    v-if="showAddChannelModal"
     class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
     @click.self="showAddChannelModal = false"
   >
     <div class="bg-trading-card rounded-lg p-6 max-w-md w-full border border-trading-border">
       <h3 class="text-xl font-bold text-white mb-4">➕ Добавить канал</h3>
-      
+
       <div class="space-y-4">
         <div>
           <label class="block text-gray-400 text-sm mb-2">Channel ID *</label>
-          <input 
-            v-model="newChannel.channel_id" 
+          <input
+            v-model="newChannel.channel_id"
             type="number"
             placeholder="-1001234567890"
             class="w-full bg-white border border-trading-border rounded px-4 py-2 text-black focus:outline-none focus:border-trading-green"
@@ -313,8 +314,8 @@
 
         <div>
           <label class="block text-gray-400 text-sm mb-2">Название канала *</label>
-          <input 
-            v-model="newChannel.name" 
+          <input
+            v-model="newChannel.name"
             type="text"
             placeholder="Crypto Signals"
             class="w-full bg-white border border-trading-border rounded px-4 py-2 text-black focus:outline-none focus:border-trading-green"
@@ -323,8 +324,8 @@
 
         <div>
           <label class="block text-gray-400 text-sm mb-2">Username (необязательно)</label>
-          <input 
-            v-model="newChannel.username" 
+          <input
+            v-model="newChannel.username"
             type="text"
             placeholder="cryptosignals"
             class="w-full bg-white border border-trading-border rounded px-4 py-2 text-black focus:outline-none focus:border-trading-green"
@@ -333,8 +334,8 @@
         </div>
 
         <div class="flex items-center">
-          <input 
-            v-model="newChannel.enabled" 
+          <input
+            v-model="newChannel.enabled"
             type="checkbox"
             id="channel-enabled"
             class="w-4 h-4 text-trading-green bg-trading-dark border-trading-border rounded focus:ring-trading-green"
@@ -344,14 +345,14 @@
       </div>
 
       <div class="flex gap-3 mt-6">
-        <button 
+        <button
           @click="addChannel"
           :disabled="!newChannel.channel_id || !newChannel.name || addingChannel"
           class="flex-1 px-4 py-2 bg-trading-green hover:bg-green-600 text-white rounded font-semibold disabled:opacity-50 transition-colors"
         >
           {{ addingChannel ? '⏳ Добавление...' : '✓ Добавить' }}
         </button>
-        <button 
+        <button
           @click="showAddChannelModal = false"
           class="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded font-semibold transition-colors"
         >
@@ -359,6 +360,7 @@
         </button>
       </div>
     </div>
+  </div>
   </div>
 </template>
 
@@ -644,28 +646,3 @@ onBeforeUnmount(() => {
   }
 })
 </script>
-
-<style scoped>
-.transition-colors {
-  transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.bg-green-900 {
-  animation: fadeIn 0.3s ease-out;
-}
-
-.bg-blue-900 {
-  animation: fadeIn 0.3s ease-out;
-}
-</style>

@@ -135,10 +135,3 @@
 <script setup>
 // Логика компонента (если нужна)
 </script>
-
-<style scoped>
-/* Дополнительные стили */
-.transition-transform {
-  transition: transform 0.2s ease-in-out;
-}
-</style>

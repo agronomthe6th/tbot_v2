@@ -999,7 +999,7 @@ async def get_failed_messages(
             query = session.query(RawMessage).filter(
                 RawMessage.is_processed == True,
                 RawMessage.parse_success == False
-            ).order_by(desc(RawMessage.timestamp))
+            ).order_by(RawMessage.timestamp.desc())
             
             total_count = query.count()
             
