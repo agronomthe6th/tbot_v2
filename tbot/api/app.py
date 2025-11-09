@@ -80,6 +80,12 @@ async def lifespan(app: FastAPI):
         # Инициализируем БД
         database_url = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/trader_tracker")
         db_manager = Database(database_url)
+
+        # Создаем таблицы если их нет
+        from core.database.migrations import create_tables
+        create_tables(db_manager.engine)
+        logger.info("✅ Database tables checked/created")
+
         message_parsing_service = MessageParsingService(
             db_manager=db_manager,
             parser=MessageParser(db_manager)
@@ -1343,307 +1349,6 @@ async def trigger_consensus_detection(
         logger.error(f"Failed to trigger consensus detection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/consensus/{consensus_id}")
-async def get_consensus_details(consensus_id: str):
-    """Получение детальной информации о консенсусе"""
-    try:
-        db = get_db_manager()
-        
-        with db.session() as session:
-            from core.database.models import ConsensusEvent, ConsensusSignal
-            
-            event = session.query(ConsensusEvent).filter(
-                ConsensusEvent.id == consensus_id
-            ).first()
-            
-            if not event:
-                raise HTTPException(status_code=404, detail="Consensus not found")
-            
-            consensus_signals = session.query(ConsensusSignal).filter(
-                ConsensusSignal.consensus_id == event.id
-            ).all()
-            
-            signals_data = []
-            for cs in consensus_signals:
-                signal = cs.signal
-                signals_data.append({
-                    'id': str(signal.id),
-                    'author': signal.author,
-                    'timestamp': signal.timestamp.isoformat(),
-                    'direction': signal.direction,
-                    'target_price': float(signal.target_price) if signal.target_price else None,
-                    'stop_loss': float(signal.stop_loss) if signal.stop_loss else None,
-                    'take_profit': float(signal.take_profit) if signal.take_profit else None,
-                    'original_text': signal.original_text,
-                    'is_initiator': cs.is_initiator
-                })
-            
-            return {
-                'id': str(event.id),
-                'ticker': event.ticker,
-                'direction': event.direction,
-                'traders_count': event.traders_count,
-                'window_minutes': event.window_minutes,
-                'consensus_strength': event.consensus_strength,
-                'first_signal_at': event.first_signal_at.isoformat(),
-                'last_signal_at': event.last_signal_at.isoformat(),
-                'detected_at': event.detected_at.isoformat(),
-                'avg_entry_price': float(event.avg_entry_price) if event.avg_entry_price else None,
-                'min_entry_price': float(event.min_entry_price) if event.min_entry_price else None,
-                'max_entry_price': float(event.max_entry_price) if event.max_entry_price else None,
-                'price_spread_pct': float(event.price_spread_pct) if event.price_spread_pct else None,
-                'status': event.status,
-                'consensus_metadata': event.consensus_metadata,
-                'signals': signals_data
-            }
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get consensus {consensus_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/instruments/{ticker}")
-async def delete_instrument(ticker: str):
-    """Удаление инструмента из базы по тикеру"""
-    try:
-        db = get_db_manager()
-        
-        ticker = ticker.upper()
-        
-        instrument = db.get_instrument_by_ticker(ticker)
-        if not instrument:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Instrument {ticker} not found in database"
-            )
-        
-        figi = instrument['figi']
-        
-        with db.session() as session:
-            from core.database.models import Instrument, Candle
-            
-            candles_deleted = session.query(Candle).filter(
-                Candle.instrument_id == figi
-            ).delete()
-            
-            session.flush()
-            
-            instrument_record = session.query(Instrument).filter(
-                Instrument.ticker == ticker
-            ).first()
-            
-            if instrument_record:
-                session.delete(instrument_record)
-                session.flush()
-            
-            logger.info(f"✅ Deleted instrument {ticker} (figi={figi}) and {candles_deleted} candles")
-            
-            return {
-                "success": True,
-                "ticker": ticker,
-                "figi": figi,
-                "candles_deleted": candles_deleted,
-                "message": f"Instrument {ticker} and its candles deleted successfully"
-            }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Failed to delete instrument {ticker}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/instruments")
-async def delete_instruments_batch(tickers: List[str] = Query(..., description="Список тикеров для удаления")):
-    """Удаление нескольких инструментов сразу"""
-    try:
-        db = get_db_manager()
-        
-        results = {
-            "total": len(tickers),
-            "deleted": [],
-            "not_found": [],
-            "errors": []
-        }
-        
-        for ticker in tickers:
-            try:
-                ticker = ticker.upper()
-                
-                instrument = db.get_instrument_by_ticker(ticker)
-                if not instrument:
-                    results["not_found"].append(ticker)
-                    continue
-                
-                figi = instrument['figi']
-                
-                with db.session() as session:
-                    from core.database.models import Instrument, Candle
-                    
-                    candles_deleted = session.query(Candle).filter(
-                        Candle.instrument_id == figi
-                    ).delete()
-                    
-                    session.flush()
-                    
-                    instrument_record = session.query(Instrument).filter(
-                        Instrument.ticker == ticker
-                    ).first()
-                    
-                    if instrument_record:
-                        session.delete(instrument_record)
-                        session.flush()
-                    
-                    results["deleted"].append({
-                        "ticker": ticker,
-                        "figi": figi,
-                        "candles_deleted": candles_deleted
-                    })
-                    logger.info(f"✅ Deleted {ticker} (figi={figi}), {candles_deleted} candles")
-                    
-            except Exception as e:
-                error_msg = f"Failed to delete {ticker}: {str(e)}"
-                results["errors"].append({"ticker": ticker, "error": error_msg})
-                logger.error(f"❌ {error_msg}")
-        
-        return {
-            "success": len(results["errors"]) == 0,
-            "results": results,
-            "summary": f"Deleted: {len(results['deleted'])}, Not found: {len(results['not_found'])}, Errors: {len(results['errors'])}"
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to process batch delete: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/consensus")
-async def get_consensus_events(
-    ticker: Optional[str] = Query(None, description="Фильтр по тикеру"),
-    direction: Optional[str] = Query(None, description="Фильтр по направлению (long/short)"),
-    status: str = Query('all', description="Фильтр по статусу (all/active/closed/expired)"),
-    min_strength: Optional[int] = Query(None, ge=0, le=100, description="Минимальная сила"),
-    days_back: int = Query(30, ge=1, le=365, description="Дней назад"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0)
-):
-    """Получение списка консенсусов с фильтрами"""
-    try:
-        db = get_db_manager()
-        
-        with db.session() as session:
-            from core.database.models import ConsensusEvent, ConsensusSignal
-            
-            query = session.query(ConsensusEvent)
-            
-            if ticker:
-                query = query.filter(ConsensusEvent.ticker == ticker.upper())
-            
-            if direction:
-                query = query.filter(ConsensusEvent.direction == direction.lower())
-            
-            if status != 'all':
-                query = query.filter(ConsensusEvent.status == status)
-            
-            if min_strength is not None:
-                query = query.filter(ConsensusEvent.consensus_strength >= min_strength)
-            
-            if days_back:
-                cutoff = datetime.utcnow() - timedelta(days=days_back)
-                query = query.filter(ConsensusEvent.detected_at >= cutoff)
-            
-            total = query.count()
-            
-            consensus_events = query.order_by(
-                ConsensusEvent.detected_at.desc()
-            ).limit(limit).offset(offset).all()
-            
-            results = []
-            for event in consensus_events:
-                signals_count = session.query(ConsensusSignal).filter(
-                    ConsensusSignal.consensus_id == event.id
-                ).count()
-                
-                results.append({
-                    'id': str(event.id),
-                    'ticker': event.ticker,
-                    'direction': event.direction,
-                    'traders_count': event.traders_count,
-                    'signals_count': signals_count,
-                    'window_minutes': event.window_minutes,
-                    'consensus_strength': event.consensus_strength,
-                    'first_signal_at': event.first_signal_at.isoformat(),
-                    'last_signal_at': event.last_signal_at.isoformat(),
-                    'detected_at': event.detected_at.isoformat(),
-                    'avg_entry_price': float(event.avg_entry_price) if event.avg_entry_price else None,
-                    'price_spread_pct': float(event.price_spread_pct) if event.price_spread_pct else None,
-                    'status': event.status,
-                    'authors': event.consensus_metadata.get('authors', []) if event.consensus_metadata else []
-                })
-            
-            return {
-                'count': total,
-                'consensus_events': results,
-                'filters': {
-                    'ticker': ticker,
-                    'direction': direction,
-                    'status': status,
-                    'min_strength': min_strength,
-                    'days_back': days_back
-                },
-                'pagination': {
-                    'limit': limit,
-                    'offset': offset,
-                    'has_more': total > (offset + limit)
-                }
-            }
-            
-    except Exception as e:
-        logger.error(f"Failed to get consensus events: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-async def manual_consensus_detection(ticker: Optional[str] = None, hours_back: int = 24):
-    """Ручная детекция консенсусов для существующих сигналов"""
-    try:
-        from core.database.models import ParsedSignal
-        
-        db = get_db_manager()
-        cutoff = datetime.utcnow() - timedelta(hours=hours_back)
-        
-        with db.session() as session:
-            query = session.query(ParsedSignal).filter(
-                and_(
-                    ParsedSignal.signal_type == 'entry',
-                    ParsedSignal.timestamp >= cutoff,
-                    ParsedSignal.direction.isnot(None)
-                )
-            )
-            
-            if ticker:
-                query = query.filter(ParsedSignal.ticker == ticker.upper())
-            
-            signals = query.order_by(ParsedSignal.timestamp.desc()).all()
-            
-            logger.info(f"Manual consensus detection: checking {len(signals)} signals")
-            
-            detected = 0
-            for signal in signals:
-                result = await consensus_detector.check_new_signal(signal.id)
-                if result:
-                    detected += 1
-            
-            logger.info(f"Manual consensus detection complete: {detected} consensuses detected")
-            
-            await broadcast_update({
-                'type': 'consensus_detection_complete',
-                'detected': detected,
-                'checked_signals': len(signals),
-                'timestamp': datetime.utcnow().isoformat()
-            })
-            
-    except Exception as e:
-        logger.error(f"Manual consensus detection failed: {e}", exc_info=True)
-
 # ===== CONSENSUS RULES ENDPOINTS =====
 
 @app.get("/api/consensus/rules")
@@ -1881,6 +1586,309 @@ async def delete_consensus_rule(rule_id: int):
     except Exception as e:
         logger.error(f"Failed to delete consensus rule: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+@app.get("/api/consensus/{consensus_id}")
+async def get_consensus_details(consensus_id: str):
+    """Получение детальной информации о консенсусе"""
+    try:
+        db = get_db_manager()
+        
+        with db.session() as session:
+            from core.database.models import ConsensusEvent, ConsensusSignal
+            
+            event = session.query(ConsensusEvent).filter(
+                ConsensusEvent.id == consensus_id
+            ).first()
+            
+            if not event:
+                raise HTTPException(status_code=404, detail="Consensus not found")
+            
+            consensus_signals = session.query(ConsensusSignal).filter(
+                ConsensusSignal.consensus_id == event.id
+            ).all()
+            
+            signals_data = []
+            for cs in consensus_signals:
+                signal = cs.signal
+                signals_data.append({
+                    'id': str(signal.id),
+                    'author': signal.author,
+                    'timestamp': signal.timestamp.isoformat(),
+                    'direction': signal.direction,
+                    'target_price': float(signal.target_price) if signal.target_price else None,
+                    'stop_loss': float(signal.stop_loss) if signal.stop_loss else None,
+                    'take_profit': float(signal.take_profit) if signal.take_profit else None,
+                    'original_text': signal.original_text,
+                    'is_initiator': cs.is_initiator
+                })
+            
+            return {
+                'id': str(event.id),
+                'ticker': event.ticker,
+                'direction': event.direction,
+                'traders_count': event.traders_count,
+                'window_minutes': event.window_minutes,
+                'consensus_strength': event.consensus_strength,
+                'rule_id': event.rule_id,
+                'first_signal_at': event.first_signal_at.isoformat(),
+                'last_signal_at': event.last_signal_at.isoformat(),
+                'detected_at': event.detected_at.isoformat(),
+                'avg_entry_price': float(event.avg_entry_price) if event.avg_entry_price else None,
+                'min_entry_price': float(event.min_entry_price) if event.min_entry_price else None,
+                'max_entry_price': float(event.max_entry_price) if event.max_entry_price else None,
+                'price_spread_pct': float(event.price_spread_pct) if event.price_spread_pct else None,
+                'status': event.status,
+                'consensus_metadata': event.consensus_metadata,
+                'signals': signals_data
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get consensus {consensus_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/instruments/{ticker}")
+async def delete_instrument(ticker: str):
+    """Удаление инструмента из базы по тикеру"""
+    try:
+        db = get_db_manager()
+        
+        ticker = ticker.upper()
+        
+        instrument = db.get_instrument_by_ticker(ticker)
+        if not instrument:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Instrument {ticker} not found in database"
+            )
+        
+        figi = instrument['figi']
+        
+        with db.session() as session:
+            from core.database.models import Instrument, Candle
+            
+            candles_deleted = session.query(Candle).filter(
+                Candle.instrument_id == figi
+            ).delete()
+            
+            session.flush()
+            
+            instrument_record = session.query(Instrument).filter(
+                Instrument.ticker == ticker
+            ).first()
+            
+            if instrument_record:
+                session.delete(instrument_record)
+                session.flush()
+            
+            logger.info(f"✅ Deleted instrument {ticker} (figi={figi}) and {candles_deleted} candles")
+            
+            return {
+                "success": True,
+                "ticker": ticker,
+                "figi": figi,
+                "candles_deleted": candles_deleted,
+                "message": f"Instrument {ticker} and its candles deleted successfully"
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to delete instrument {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/instruments")
+async def delete_instruments_batch(tickers: List[str] = Query(..., description="Список тикеров для удаления")):
+    """Удаление нескольких инструментов сразу"""
+    try:
+        db = get_db_manager()
+        
+        results = {
+            "total": len(tickers),
+            "deleted": [],
+            "not_found": [],
+            "errors": []
+        }
+        
+        for ticker in tickers:
+            try:
+                ticker = ticker.upper()
+                
+                instrument = db.get_instrument_by_ticker(ticker)
+                if not instrument:
+                    results["not_found"].append(ticker)
+                    continue
+                
+                figi = instrument['figi']
+                
+                with db.session() as session:
+                    from core.database.models import Instrument, Candle
+                    
+                    candles_deleted = session.query(Candle).filter(
+                        Candle.instrument_id == figi
+                    ).delete()
+                    
+                    session.flush()
+                    
+                    instrument_record = session.query(Instrument).filter(
+                        Instrument.ticker == ticker
+                    ).first()
+                    
+                    if instrument_record:
+                        session.delete(instrument_record)
+                        session.flush()
+                    
+                    results["deleted"].append({
+                        "ticker": ticker,
+                        "figi": figi,
+                        "candles_deleted": candles_deleted
+                    })
+                    logger.info(f"✅ Deleted {ticker} (figi={figi}), {candles_deleted} candles")
+                    
+            except Exception as e:
+                error_msg = f"Failed to delete {ticker}: {str(e)}"
+                results["errors"].append({"ticker": ticker, "error": error_msg})
+                logger.error(f"❌ {error_msg}")
+        
+        return {
+            "success": len(results["errors"]) == 0,
+            "results": results,
+            "summary": f"Deleted: {len(results['deleted'])}, Not found: {len(results['not_found'])}, Errors: {len(results['errors'])}"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to process batch delete: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consensus")
+async def get_consensus_events(
+    ticker: Optional[str] = Query(None, description="Фильтр по тикеру"),
+    direction: Optional[str] = Query(None, description="Фильтр по направлению (long/short)"),
+    status: str = Query('all', description="Фильтр по статусу (all/active/closed/expired)"),
+    min_strength: Optional[int] = Query(None, ge=0, le=100, description="Минимальная сила"),
+    days_back: int = Query(30, ge=1, le=365, description="Дней назад"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0)
+):
+    """Получение списка консенсусов с фильтрами"""
+    try:
+        db = get_db_manager()
+        
+        with db.session() as session:
+            from core.database.models import ConsensusEvent, ConsensusSignal
+            
+            query = session.query(ConsensusEvent)
+            
+            if ticker:
+                query = query.filter(ConsensusEvent.ticker == ticker.upper())
+            
+            if direction:
+                query = query.filter(ConsensusEvent.direction == direction.lower())
+            
+            if status != 'all':
+                query = query.filter(ConsensusEvent.status == status)
+            
+            if min_strength is not None:
+                query = query.filter(ConsensusEvent.consensus_strength >= min_strength)
+            
+            if days_back:
+                cutoff = datetime.utcnow() - timedelta(days=days_back)
+                query = query.filter(ConsensusEvent.detected_at >= cutoff)
+            
+            total = query.count()
+            
+            consensus_events = query.order_by(
+                ConsensusEvent.detected_at.desc()
+            ).limit(limit).offset(offset).all()
+            
+            results = []
+            for event in consensus_events:
+                signals_count = session.query(ConsensusSignal).filter(
+                    ConsensusSignal.consensus_id == event.id
+                ).count()
+                
+                results.append({
+                    'id': str(event.id),
+                    'ticker': event.ticker,
+                    'direction': event.direction,
+                    'traders_count': event.traders_count,
+                    'signals_count': signals_count,
+                    'window_minutes': event.window_minutes,
+                    'consensus_strength': event.consensus_strength,
+                    'rule_id': event.rule_id,
+                    'first_signal_at': event.first_signal_at.isoformat(),
+                    'last_signal_at': event.last_signal_at.isoformat(),
+                    'detected_at': event.detected_at.isoformat(),
+                    'avg_entry_price': float(event.avg_entry_price) if event.avg_entry_price else None,
+                    'price_spread_pct': float(event.price_spread_pct) if event.price_spread_pct else None,
+                    'status': event.status,
+                    'authors': event.consensus_metadata.get('authors', []) if event.consensus_metadata else []
+                })
+            
+            return {
+                'count': total,
+                'consensus_events': results,
+                'filters': {
+                    'ticker': ticker,
+                    'direction': direction,
+                    'status': status,
+                    'min_strength': min_strength,
+                    'days_back': days_back
+                },
+                'pagination': {
+                    'limit': limit,
+                    'offset': offset,
+                    'has_more': total > (offset + limit)
+                }
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to get consensus events: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def manual_consensus_detection(ticker: Optional[str] = None, hours_back: int = 24):
+    """Ручная детекция консенсусов для существующих сигналов"""
+    try:
+        from core.database.models import ParsedSignal
+        
+        db = get_db_manager()
+        cutoff = datetime.utcnow() - timedelta(hours=hours_back)
+        
+        with db.session() as session:
+            query = session.query(ParsedSignal).filter(
+                and_(
+                    ParsedSignal.signal_type == 'entry',
+                    ParsedSignal.timestamp >= cutoff,
+                    ParsedSignal.direction.isnot(None)
+                )
+            )
+            
+            if ticker:
+                query = query.filter(ParsedSignal.ticker == ticker.upper())
+            
+            signals = query.order_by(ParsedSignal.timestamp.desc()).all()
+            
+            logger.info(f"Manual consensus detection: checking {len(signals)} signals")
+            
+            detected = 0
+            for signal in signals:
+                result = await consensus_detector.check_new_signal(signal.id)
+                if result:
+                    detected += 1
+            
+            logger.info(f"Manual consensus detection complete: {detected} consensuses detected")
+            
+            await broadcast_update({
+                'type': 'consensus_detection_complete',
+                'detected': detected,
+                'checked_signals': len(signals),
+                'timestamp': datetime.utcnow().isoformat()
+            })
+            
+    except Exception as e:
+        logger.error(f"Manual consensus detection failed: {e}", exc_info=True)
+
 
 # ===== TELEGRAM SCRAPER ENDPOINTS =====
 

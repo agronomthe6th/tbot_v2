@@ -261,9 +261,10 @@ class Candle(Base):
 class ConsensusEvent(Base):
     """События консенсуса трейдеров"""
     __tablename__ = 'consensus_events'
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+    rule_id = Column(Integer, ForeignKey('consensus_rules.id'), nullable=True, index=True)  # Правило, которое создало консенсус
+
     # Основные параметры
     ticker = Column(String(10), nullable=False, index=True)
     direction = Column(String(10), nullable=False)  # long, short

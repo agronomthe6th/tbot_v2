@@ -19,28 +19,23 @@ logger = logging.getLogger(__name__)
 
 class ConsensusDetector:
     """
-    Детектор консенсуса трейдеров
-    MVP версия с заготовкой под V1
+    Детектор консенсуса трейдеров с гибкой системой правил из БД
     """
-    
+
     def __init__(self, db: Database):
         self.db = db
 
-        # Параметры консенсуса (можно настроить)
-        self.default_window_minutes = 10  # Окно времени для поиска консенсуса
-        self.default_min_traders = 2  # Минимум уникальных трейдеров
-        self.strict_consensus = True  # Все сигналы должны быть в одном направлении
+        # Дефолтные параметры (fallback если нет правил в БД)
+        self.default_window_minutes = 10
+        self.default_min_traders = 2
+        self.strict_consensus = True
 
-        logger.info(
-            f"✅ ConsensusDetector initialized: "
-            f"window={self.default_window_minutes}min, "
-            f"min_traders={self.default_min_traders}, "
-            f"strict={self.strict_consensus}"
-        )
+        logger.info("✅ ConsensusDetector initialized with rule-based system")
     
     def check_new_signal_sync(self, signal_id: UUID) -> Optional[Dict]:
         """
         Синхронная версия проверки консенсуса для интеграции в синхронный код
+        Использует правила из БД для гибкой настройки
 
         Args:
             signal_id: UUID нового сигнала
@@ -49,6 +44,8 @@ class ConsensusDetector:
             Dict с информацией о консенсусе если найден, иначе None
         """
         try:
+            from core.database.models import ConsensusRule
+
             with self.db.session() as session:
                 signal = session.query(ParsedSignal).filter(
                     ParsedSignal.id == signal_id
@@ -72,34 +69,84 @@ class ConsensusDetector:
 
                 logger.info(f"🔍 Checking consensus for: {signal.ticker} {signal.direction} by {signal.author}")
 
-                consensus_data = self._find_consensus_window(session, signal)
+                # Загружаем активные правила по приоритету
+                rules = session.query(ConsensusRule).filter(
+                    ConsensusRule.is_active == True
+                ).order_by(ConsensusRule.priority.desc()).all()
 
-                if consensus_data:
-                    consensus_event = self._create_consensus_event(
-                        session,
-                        signal,
-                        consensus_data
+                if not rules:
+                    logger.debug("No active consensus rules found, using defaults")
+                    # Fallback на дефолтное правило
+                    consensus_data = self._find_consensus_window(
+                        session, signal,
+                        window_minutes=self.default_window_minutes,
+                        min_traders=self.default_min_traders,
+                        strict_consensus=self.strict_consensus,
+                        rule=None
+                    )
+                    if consensus_data:
+                        consensus_event = self._create_consensus_event(
+                            session, signal, consensus_data, rule_id=None
+                        )
+                        logger.info(
+                            f"🔥 CONSENSUS DETECTED (default): {consensus_event.ticker} {consensus_event.direction} "
+                            f"- {consensus_event.traders_count} traders"
+                        )
+                        return self._format_consensus_result(consensus_event)
+                    return None
+
+                # Проверяем каждое правило по приоритету
+                for rule in rules:
+                    # Фильтр по тикеру
+                    if rule.ticker_filter:
+                        tickers = [t.strip().upper() for t in rule.ticker_filter.split(',')]
+                        if signal.ticker.upper() not in tickers:
+                            continue
+
+                    # Фильтр по направлению
+                    if rule.direction_filter:
+                        if signal.direction != rule.direction_filter:
+                            continue
+
+                    logger.debug(f"Applying rule: {rule.name} (priority={rule.priority})")
+
+                    consensus_data = self._find_consensus_window(
+                        session, signal,
+                        window_minutes=rule.window_minutes,
+                        min_traders=rule.min_traders,
+                        strict_consensus=rule.strict_consensus,
+                        rule=rule
                     )
 
-                    logger.info(
-                        f"🔥 CONSENSUS DETECTED: {consensus_event.ticker} {consensus_event.direction} "
-                        f"- {consensus_event.traders_count} traders in {consensus_event.window_minutes}min"
-                    )
+                    if consensus_data:
+                        consensus_event = self._create_consensus_event(
+                            session, signal, consensus_data, rule_id=rule.id
+                        )
 
-                    return {
-                        'consensus_id': str(consensus_event.id),
-                        'ticker': consensus_event.ticker,
-                        'direction': consensus_event.direction,
-                        'traders_count': consensus_event.traders_count,
-                        'window_minutes': consensus_event.window_minutes,
-                        'strength': consensus_event.consensus_strength
-                    }
+                        logger.info(
+                            f"🔥 CONSENSUS DETECTED by rule '{rule.name}': {consensus_event.ticker} {consensus_event.direction} "
+                            f"- {consensus_event.traders_count} traders in {consensus_event.window_minutes}min"
+                        )
+
+                        return self._format_consensus_result(consensus_event)
 
                 return None
 
         except Exception as e:
             logger.error(f"Error checking signal {signal_id}: {e}", exc_info=True)
             return None
+
+    def _format_consensus_result(self, consensus_event: ConsensusEvent) -> Dict:
+        """Форматирование результата консенсуса"""
+        return {
+            'consensus_id': str(consensus_event.id),
+            'ticker': consensus_event.ticker,
+            'direction': consensus_event.direction,
+            'traders_count': consensus_event.traders_count,
+            'window_minutes': consensus_event.window_minutes,
+            'strength': consensus_event.consensus_strength,
+            'rule_id': consensus_event.rule_id
+        }
 
     async def check_new_signal(self, signal_id: UUID) -> Optional[Dict]:
         """
@@ -113,15 +160,17 @@ class ConsensusDetector:
         """
         return self.check_new_signal_sync(signal_id)
     
-    def _find_consensus_window(self, session, signal: ParsedSignal) -> Optional[Dict]:
-        """Ищем консенсус в окне вокруг сигнала"""
+    def _find_consensus_window(self, session, signal: ParsedSignal,
+                               window_minutes: int, min_traders: int,
+                               strict_consensus: bool, rule) -> Optional[Dict]:
+        """Ищем консенсус в окне вокруг сигнала с параметрами из правила"""
         ticker = signal.ticker
         direction = signal.direction
         signal_time = signal.timestamp
-        
-        window_start = signal_time - timedelta(minutes=self.default_window_minutes / 2)
-        window_end = signal_time + timedelta(minutes=self.default_window_minutes / 2)
-        
+
+        window_start = signal_time - timedelta(minutes=window_minutes / 2)
+        window_end = signal_time + timedelta(minutes=window_minutes / 2)
+
         window_signals = session.query(ParsedSignal).filter(
             and_(
                 ParsedSignal.ticker == ticker,
@@ -131,40 +180,41 @@ class ConsensusDetector:
                 ParsedSignal.direction.isnot(None)
             )
         ).all()
-        
-        if len(window_signals) < self.default_min_traders:
+
+        if len(window_signals) < min_traders:
             logger.debug(
-                f"Not enough signals: {len(window_signals)} < {self.default_min_traders}"
+                f"Not enough signals: {len(window_signals)} < {min_traders}"
             )
             return None
-        
+
         direction_groups = self._group_by_direction(window_signals)
-        
-        if self.strict_consensus:
+
+        if strict_consensus:
             if len(direction_groups) > 1:
                 logger.debug(f"Mixed directions: {list(direction_groups.keys())}")
                 return None
-            
+
             consensus_direction = list(direction_groups.keys())[0]
             consensus_signals = direction_groups[consensus_direction]
         else:
             consensus_direction = max(direction_groups, key=lambda d: len(direction_groups[d]))
             consensus_signals = direction_groups[consensus_direction]
-        
+
         unique_authors = set(s.author for s in consensus_signals if s.author)
-        
-        if len(unique_authors) < self.default_min_traders:
+
+        if len(unique_authors) < min_traders:
             logger.debug(
-                f"Not enough unique authors: {len(unique_authors)} < {self.default_min_traders}"
+                f"Not enough unique authors: {len(unique_authors)} < {min_traders}"
             )
             return None
-        
+
         return {
             'signals': consensus_signals,
             'direction': consensus_direction,
             'unique_authors': unique_authors,
             'window_start': window_start,
-            'window_end': window_end
+            'window_end': window_end,
+            'window_minutes': window_minutes
         }
     
     def _group_by_direction(self, signals: List[ParsedSignal]) -> Dict[str, List[ParsedSignal]]:
@@ -177,31 +227,33 @@ class ConsensusDetector:
             groups[direction].append(signal)
         return groups
     
-    def _create_consensus_event(self, session, trigger_signal: ParsedSignal, consensus_data: Dict) -> ConsensusEvent:
-        """Создаем событие консенсуса"""
+    def _create_consensus_event(self, session, trigger_signal: ParsedSignal,
+                               consensus_data: Dict, rule_id: Optional[int]) -> ConsensusEvent:
+        """Создаем событие консенсуса с указанием правила"""
         signals = consensus_data['signals']
-        
+
         signals_sorted = sorted(signals, key=lambda s: s.timestamp)
         first_signal = signals_sorted[0]
         last_signal = signals_sorted[-1]
-        
+
         prices = [s.target_price for s in signals if s.target_price]
-        
+
         avg_price = sum(prices) / len(prices) if prices else None
         min_price = min(prices) if prices else None
         max_price = max(prices) if prices else None
-        
+
         price_spread = None
         if avg_price and min_price and max_price and avg_price > 0:
             price_spread = ((max_price - min_price) / avg_price) * 100
-        
+
         strength = self._calculate_strength(consensus_data, price_spread)
-        
+
         consensus_event = ConsensusEvent(
             ticker=trigger_signal.ticker,
             direction=consensus_data['direction'],
             traders_count=len(consensus_data['unique_authors']),
-            window_minutes=self.default_window_minutes,
+            window_minutes=consensus_data['window_minutes'],
+            rule_id=rule_id,
             first_signal_at=first_signal.timestamp,
             last_signal_at=last_signal.timestamp,
             avg_entry_price=avg_price,
@@ -216,10 +268,10 @@ class ConsensusDetector:
                 'total_signals': len(signals)
             }
         )
-        
+
         session.add(consensus_event)
         session.flush()
-        
+
         for signal in signals:
             consensus_signal = ConsensusSignal(
                 consensus_id=consensus_event.id,
@@ -227,9 +279,9 @@ class ConsensusDetector:
                 is_initiator=(signal.id == trigger_signal.id)
             )
             session.add(consensus_signal)
-        
+
         session.commit()
-        
+
         return consensus_event
     
     def _calculate_strength(self, consensus_data: Dict, price_spread: Optional[float]) -> int:
