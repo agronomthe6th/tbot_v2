@@ -38,7 +38,9 @@ class ConsensusBacktester:
         tickers: Optional[List[str]] = None,
         take_profit_pct: float = 5.0,  # % для take profit
         stop_loss_pct: float = 3.0,  # % для stop loss
-        holding_hours: int = 24  # Время удержания позиции
+        holding_hours: int = 24,  # Время удержания позиции
+        initial_capital: float = 100000.0,  # Начальный капитал в рублях
+        position_size_pct: float = 10.0  # % от капитала на одну сделку
     ) -> Dict:
         """
         Запускает бэктест для правила консенсуса
@@ -51,6 +53,8 @@ class ConsensusBacktester:
             take_profit_pct: Процент для фиксации прибыли
             stop_loss_pct: Процент для стоп-лосса
             holding_hours: Максимальное время удержания позиции
+            initial_capital: Начальный капитал в рублях
+            position_size_pct: Процент от капитала на одну сделку
 
         Returns:
             Словарь с результатами бэктеста
@@ -113,31 +117,42 @@ class ConsensusBacktester:
                         for cs in consensus_data['signals']:
                             processed_signal_ids.add(cs.id)
 
+                        # Вычисляем среднюю цену из сигналов
+                        prices = [s.target_price for s in consensus_data['signals'] if s.target_price]
+                        avg_price = sum(prices) / len(prices) if prices else None
+
                         consensus_events.append({
                             'ticker': signal.ticker,
                             'direction': consensus_data['direction'],
                             'timestamp': signal.timestamp,
                             'traders_count': len(consensus_data['unique_authors']),
-                            'avg_price': consensus_data.get('avg_price'),
+                            'avg_price': avg_price,
                             'signals': consensus_data['signals']
                         })
 
                 logger.info(f"Detected {len(consensus_events)} consensus events")
 
                 # Симулируем торговлю по каждому консенсусу
+                capital = initial_capital
                 results = []
+
                 for event in consensus_events:
                     result = self._simulate_trade(
                         session, event,
                         take_profit_pct=take_profit_pct,
                         stop_loss_pct=stop_loss_pct,
-                        holding_hours=holding_hours
+                        holding_hours=holding_hours,
+                        capital=capital,
+                        position_size_pct=position_size_pct
                     )
                     if result:
+                        # Обновляем капитал
+                        capital += result['profit_abs']
+                        result['capital_after'] = capital
                         results.append(result)
 
                 # Агрегируем результаты
-                stats = self._calculate_statistics(results)
+                stats = self._calculate_statistics(results, initial_capital)
 
                 # Сохраняем результаты в БД
                 backtest_record = ConsensusBacktest(
@@ -165,13 +180,16 @@ class ConsensusBacktester:
 
                 logger.info(
                     f"✅ Backtest completed: {stats['profitable_count']} wins, "
-                    f"{stats['loss_count']} losses, {stats['win_rate']:.1f}% win rate"
+                    f"{stats['loss_count']} losses, {stats['win_rate']:.1f}% win rate, "
+                    f"final capital: {capital:.2f} RUB"
                 )
 
                 return {
                     'backtest_id': str(backtest_record.id),
                     'stats': stats,
-                    'results': results
+                    'results': results,
+                    'initial_capital': initial_capital,
+                    'final_capital': capital
                 }
 
         except Exception as e:
@@ -184,7 +202,9 @@ class ConsensusBacktester:
         event: Dict,
         take_profit_pct: float,
         stop_loss_pct: float,
-        holding_hours: int
+        holding_hours: int,
+        capital: float,
+        position_size_pct: float
     ) -> Optional[Dict]:
         """
         Симулирует сделку по консенсусу
@@ -195,6 +215,8 @@ class ConsensusBacktester:
             take_profit_pct: % для take profit
             stop_loss_pct: % для stop loss
             holding_hours: Максимальное время удержания
+            capital: Текущий капитал
+            position_size_pct: % от капитала на сделку
 
         Returns:
             Результат сделки или None
@@ -227,6 +249,14 @@ class ConsensusBacktester:
 
         entry_price = float(entry_candle.close)
 
+        # Вычисляем размер позиции
+        position_value = capital * (position_size_pct / 100)
+        shares = int(position_value / entry_price)
+
+        if shares == 0:
+            logger.debug(f"Position too small for {ticker}: capital={capital}, price={entry_price}")
+            return None
+
         # Устанавливаем целевые уровни
         if direction == 'long':
             take_profit_price = entry_price * (1 + take_profit_pct / 100)
@@ -251,60 +281,84 @@ class ConsensusBacktester:
         exit_price = entry_price
         exit_candle_time = entry_candle.time
 
-        for candle in candles:
-            high = float(candle.high)
-            low = float(candle.low)
-            close = float(candle.close)
+        # Если свечей нет, пытаемся найти последнюю доступную свечу после входа
+        if not candles:
+            last_candle = session.query(Candle).filter(
+                and_(
+                    Candle.instrument_id == figi,
+                    Candle.time > entry_candle.time,
+                    Candle.interval == 'hour'
+                )
+            ).order_by(Candle.time.desc()).first()
 
-            if direction == 'long':
-                # Проверяем take profit
-                if high >= take_profit_price:
-                    exit_price = take_profit_price
-                    exit_reason = 'take_profit'
-                    exit_candle_time = candle.time
-                    break
-                # Проверяем stop loss
-                if low <= stop_loss_price:
-                    exit_price = stop_loss_price
-                    exit_reason = 'stop_loss'
-                    exit_candle_time = candle.time
-                    break
-            else:  # short
-                # Проверяем take profit
-                if low <= take_profit_price:
-                    exit_price = take_profit_price
-                    exit_reason = 'take_profit'
-                    exit_candle_time = candle.time
-                    break
-                # Проверяем stop loss
-                if high >= stop_loss_price:
-                    exit_price = stop_loss_price
-                    exit_reason = 'stop_loss'
-                    exit_candle_time = candle.time
-                    break
+            if last_candle:
+                exit_price = float(last_candle.close)
+                exit_candle_time = last_candle.time
+            # Если нет свечей вообще, используем цену входа (P&L = 0)
 
-            exit_price = close
-            exit_candle_time = candle.time
+        else:
+            # Проходим по свечам и ищем точку выхода
+            for candle in candles:
+                high = float(candle.high)
+                low = float(candle.low)
+                close = float(candle.close)
 
-        # Вычисляем P&L
+                if direction == 'long':
+                    # Проверяем take profit
+                    if high >= take_profit_price:
+                        exit_price = take_profit_price
+                        exit_reason = 'take_profit'
+                        exit_candle_time = candle.time
+                        break
+                    # Проверяем stop loss
+                    if low <= stop_loss_price:
+                        exit_price = stop_loss_price
+                        exit_reason = 'stop_loss'
+                        exit_candle_time = candle.time
+                        break
+                else:  # short
+                    # Проверяем take profit
+                    if low <= take_profit_price:
+                        exit_price = take_profit_price
+                        exit_reason = 'take_profit'
+                        exit_candle_time = candle.time
+                        break
+                    # Проверяем stop loss
+                    if high >= stop_loss_price:
+                        exit_price = stop_loss_price
+                        exit_reason = 'stop_loss'
+                        exit_candle_time = candle.time
+                        break
+
+                # Сохраняем цену последней свечи (если не сработал TP/SL)
+                exit_price = close
+                exit_candle_time = candle.time
+
+        # Вычисляем P&L в процентах
         if direction == 'long':
             pnl_pct = ((exit_price - entry_price) / entry_price) * 100
         else:  # short
             pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+
+        # Вычисляем абсолютную прибыль в рублях
+        profit_abs = shares * entry_price * (pnl_pct / 100)
 
         return {
             'ticker': ticker,
             'direction': direction,
             'entry_time': entry_time.isoformat(),
             'exit_time': exit_candle_time.isoformat(),
-            'entry_price': entry_price,
-            'exit_price': exit_price,
+            'entry_price': round(entry_price, 2),
+            'exit_price': round(exit_price, 2),
+            'shares': shares,
+            'position_value': round(shares * entry_price, 2),
             'pnl_pct': round(pnl_pct, 2),
+            'profit_abs': round(profit_abs, 2),
             'exit_reason': exit_reason,
             'traders_count': event['traders_count']
         }
 
-    def _calculate_statistics(self, results: List[Dict]) -> Dict:
+    def _calculate_statistics(self, results: List[Dict], initial_capital: float) -> Dict:
         """Вычисляет статистику по результатам"""
         if not results:
             return {
@@ -316,6 +370,7 @@ class ConsensusBacktester:
                 'max_profit_pct': 0,
                 'max_loss_pct': 0,
                 'total_return_pct': 0,
+                'total_profit_abs': 0,
                 'by_ticker': {}
             }
 
@@ -332,7 +387,11 @@ class ConsensusBacktester:
         max_profit_pct = max((r['pnl_pct'] for r in results), default=0)
         max_loss_pct = min((r['pnl_pct'] for r in results), default=0)
 
-        total_return_pct = sum(r['pnl_pct'] for r in results)
+        # Общая прибыль в рублях
+        total_profit_abs = sum(r['profit_abs'] for r in results)
+
+        # Общая доходность в процентах от начального капитала
+        total_return_pct = (total_profit_abs / initial_capital) * 100 if initial_capital > 0 else 0
 
         # Статистика по тикерам
         by_ticker = {}
@@ -342,12 +401,14 @@ class ConsensusBacktester:
                 by_ticker[ticker] = {
                     'count': 0,
                     'profitable': 0,
-                    'total_pnl': 0
+                    'total_pnl': 0,
+                    'total_profit_abs': 0
                 }
             by_ticker[ticker]['count'] += 1
             if result['pnl_pct'] > 0:
                 by_ticker[ticker]['profitable'] += 1
             by_ticker[ticker]['total_pnl'] += result['pnl_pct']
+            by_ticker[ticker]['total_profit_abs'] += result['profit_abs']
 
         return {
             'profitable_count': profitable_count,
@@ -358,6 +419,7 @@ class ConsensusBacktester:
             'max_profit_pct': round(max_profit_pct, 2),
             'max_loss_pct': round(max_loss_pct, 2),
             'total_return_pct': round(total_return_pct, 2),
+            'total_profit_abs': round(total_profit_abs, 2),
             'by_ticker': by_ticker
         }
 

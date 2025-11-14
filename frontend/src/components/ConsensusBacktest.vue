@@ -84,6 +84,30 @@
             class="w-full bg-trading-bg border border-trading-border rounded px-3 py-2 text-white"
           />
         </div>
+
+        <!-- Параметры капитала -->
+        <div>
+          <label class="block text-sm text-gray-400 mb-2">Начальный капитал (₽)</label>
+          <input
+            v-model.number="backtestForm.initial_capital"
+            type="number"
+            min="1000"
+            step="1000"
+            class="w-full bg-trading-bg border border-trading-border rounded px-3 py-2 text-white"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm text-gray-400 mb-2">Размер позиции (% от капитала)</label>
+          <input
+            v-model.number="backtestForm.position_size_pct"
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            class="w-full bg-trading-bg border border-trading-border rounded px-3 py-2 text-white"
+          />
+        </div>
       </div>
 
       <div class="flex gap-2">
@@ -122,6 +146,9 @@
             :class="currentResult.stats.total_return_pct >= 0 ? 'text-trading-green' : 'text-trading-red'"
           >
             {{ currentResult.stats.total_return_pct?.toFixed(2) || 0 }}%
+          </div>
+          <div v-if="currentResult.stats.total_profit_abs" class="text-sm text-gray-400 mt-1">
+            {{ currentResult.stats.total_profit_abs?.toFixed(0) }} ₽
           </div>
         </div>
 
@@ -196,6 +223,7 @@
                 <th class="px-3 py-2 text-left">Вход</th>
                 <th class="px-3 py-2 text-left">Выход</th>
                 <th class="px-3 py-2 text-right">P&L %</th>
+                <th class="px-3 py-2 text-right">P&L ₽</th>
                 <th class="px-3 py-2 text-left">Причина выхода</th>
                 <th class="px-3 py-2 text-center">Трейдеров</th>
               </tr>
@@ -221,6 +249,12 @@
                   :class="result.pnl_pct >= 0 ? 'text-trading-green' : 'text-trading-red'"
                 >
                   {{ result.pnl_pct >= 0 ? '+' : '' }}{{ result.pnl_pct?.toFixed(2) }}%
+                </td>
+                <td
+                  class="px-3 py-2 text-right font-semibold"
+                  :class="result.profit_abs >= 0 ? 'text-trading-green' : 'text-trading-red'"
+                >
+                  {{ result.profit_abs >= 0 ? '+' : '' }}{{ result.profit_abs?.toFixed(0) }}
                 </td>
                 <td class="px-3 py-2">
                   <span
@@ -303,7 +337,9 @@ export default {
         tickers_str: '',
         take_profit_pct: 5.0,
         stop_loss_pct: 3.0,
-        holding_hours: 24
+        holding_hours: 24,
+        initial_capital: 100000.0,
+        position_size_pct: 10.0
       },
       isRunning: false,
       currentResult: null,
@@ -345,7 +381,9 @@ export default {
           end_date: new Date(this.backtestForm.end_date).toISOString(),
           take_profit_pct: this.backtestForm.take_profit_pct,
           stop_loss_pct: this.backtestForm.stop_loss_pct,
-          holding_hours: this.backtestForm.holding_hours
+          holding_hours: this.backtestForm.holding_hours,
+          initial_capital: this.backtestForm.initial_capital,
+          position_size_pct: this.backtestForm.position_size_pct
         }
 
         if (this.backtestForm.tickers_str.trim()) {

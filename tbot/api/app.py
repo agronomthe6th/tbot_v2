@@ -2062,6 +2062,8 @@ async def run_consensus_backtest(backtest_params: Dict):
     - take_profit_pct: % для take profit (по умолчанию 5.0)
     - stop_loss_pct: % для stop loss (по умолчанию 3.0)
     - holding_hours: Максимальное время удержания позиции (по умолчанию 24)
+    - initial_capital: Начальный капитал для бэктеста в рублях (по умолчанию 100000.0)
+    - position_size_pct: Размер позиции в % от капитала (по умолчанию 10.0)
     """
     try:
         from analysis.consensus_backtester import get_consensus_backtester
@@ -2078,6 +2080,8 @@ async def run_consensus_backtest(backtest_params: Dict):
         take_profit_pct = backtest_params.get('take_profit_pct', 5.0)
         stop_loss_pct = backtest_params.get('stop_loss_pct', 3.0)
         holding_hours = backtest_params.get('holding_hours', 24)
+        initial_capital = backtest_params.get('initial_capital', 100000.0)
+        position_size_pct = backtest_params.get('position_size_pct', 10.0)
 
         backtester = get_consensus_backtester(get_db_manager())
 
@@ -2088,7 +2092,9 @@ async def run_consensus_backtest(backtest_params: Dict):
             tickers=tickers,
             take_profit_pct=take_profit_pct,
             stop_loss_pct=stop_loss_pct,
-            holding_hours=holding_hours
+            holding_hours=holding_hours,
+            initial_capital=initial_capital,
+            position_size_pct=position_size_pct
         )
 
         return result
