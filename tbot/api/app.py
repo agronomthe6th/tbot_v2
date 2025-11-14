@@ -18,7 +18,9 @@ from integrations.tinkoff_integration import TinkoffIntegration
 from integrations.historical_data_loader import HistoricalDataLoader
 from utils.datetime_utils import now_utc, utc_from_days_ago, ensure_timezone_aware, days_between_utc
 from integrations.telegram_scraper import TelegramScraper
+from analysis.technical_indicators import TechnicalIndicators
 import re
+import pandas as pd
 
 # Настройка логирования
 logging.basicConfig(
@@ -600,6 +602,157 @@ async def get_candles_data(
     except Exception as e:
         logger.error(f"Failed to get candles for {ticker}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/candles/{ticker}/indicators")
+async def get_candles_with_indicators(
+    ticker: str,
+    days: int = Query(30, ge=1, le=365, description="Количество дней"),
+    interval: str = Query('5min', description="Интервал свечей (1min, 5min, hour, day)"),
+    rsi_period: int = Query(14, ge=2, le=100, description="Период RSI"),
+    macd_fast: int = Query(12, ge=2, le=100, description="Быстрый период MACD"),
+    macd_slow: int = Query(26, ge=2, le=100, description="Медленный период MACD"),
+    macd_signal: int = Query(9, ge=2, le=100, description="Период сигнальной линии MACD"),
+    bb_period: int = Query(20, ge=2, le=100, description="Период Bollinger Bands"),
+    bb_std: float = Query(2.0, ge=0.1, le=5.0, description="Стандартное отклонение BB")
+):
+    """
+    Получение свечных данных для тикера с вычисленными техническими индикаторами.
+
+    Возвращает свечи с индикаторами:
+    - OBV (On-Balance Volume)
+    - MACD (Moving Average Convergence Divergence)
+    - RSI (Relative Strength Index)
+    - Bollinger Bands
+
+    Также возвращает текущие торговые сигналы на основе индикаторов.
+    """
+    try:
+        db = get_db_manager()
+
+        # Валидация интервала
+        valid_intervals = ['1min', '5min', 'hour', 'day']
+        if interval not in valid_intervals:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid interval. Supported: {', '.join(valid_intervals)}"
+            )
+
+        # Валидация параметров MACD
+        if macd_fast >= macd_slow:
+            raise HTTPException(
+                status_code=400,
+                detail="MACD fast period must be less than slow period"
+            )
+
+        instrument = db.get_instrument_by_ticker(ticker.upper())
+
+        if not instrument and tinkoff_client:
+            logger.info(f"Instrument {ticker} not in DB, searching via Tinkoff API...")
+            try:
+                api_instrument = await tinkoff_client.find_instrument_by_ticker(ticker)
+                if api_instrument:
+                    db.save_instrument(
+                        figi=api_instrument["figi"],
+                        ticker=ticker,
+                        name=api_instrument["name"],
+                        instrument_type=api_instrument.get("type", "share")
+                    )
+                    instrument = db.get_instrument_by_ticker(ticker.upper())
+                    logger.info(f"✅ Added instrument {ticker} to database")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to find instrument via API: {e}")
+
+        if not instrument:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Instrument {ticker} not found"
+            )
+
+        figi = instrument['figi']
+        from_date = ensure_timezone_aware(datetime.utcnow() - timedelta(days=days))
+
+        candles = db.get_candles(
+            figi=figi,
+            interval=interval,
+            from_time=from_date
+        )
+
+        # Если свечей нет в БД - загружаем через API
+        if not candles and tinkoff_client:
+            logger.info(f"No candles for {ticker} ({interval}) in DB, loading from Tinkoff API...")
+            try:
+                to_date = ensure_timezone_aware(datetime.utcnow())
+                api_candles = await tinkoff_client.get_candles(
+                    figi=figi,
+                    interval=interval,
+                    from_time=from_date,
+                    to_time=to_date
+                )
+
+                if api_candles:
+                    save_result = db.save_candles(api_candles, figi=figi, interval=interval)
+                    if save_result.get('saved', 0) > 0:
+                        candles = api_candles
+                        logger.info(f"✅ Loaded and saved {len(candles)} candles for {ticker}")
+                    else:
+                        logger.warning(f"⚠️ Failed to save {len(api_candles)} candles to DB")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to load candles from API: {e}")
+
+        if not candles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No candle data available for {ticker}"
+            )
+
+        # Преобразуем в DataFrame для расчета индикаторов
+        df = pd.DataFrame(candles)
+
+        # Вычисляем все индикаторы
+        df_with_indicators = TechnicalIndicators.calculate_all_indicators(
+            df,
+            price_col='close',
+            volume_col='volume',
+            rsi_period=rsi_period,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            bb_period=bb_period,
+            bb_std=bb_std
+        )
+
+        # Получаем торговые сигналы
+        signals = TechnicalIndicators.get_indicator_signals(df_with_indicators)
+
+        # Конвертируем DataFrame обратно в список словарей
+        # Заменяем NaN на None для корректной JSON сериализации
+        result_candles = df_with_indicators.replace({pd.NA: None, float('nan'): None}).to_dict('records')
+
+        return {
+            "ticker": ticker,
+            "figi": figi,
+            "interval": interval,
+            "count": len(result_candles),
+            "period_days": days,
+            "candles": result_candles,
+            "indicators": {
+                "rsi_period": rsi_period,
+                "macd_fast": macd_fast,
+                "macd_slow": macd_slow,
+                "macd_signal": macd_signal,
+                "bb_period": bb_period,
+                "bb_std": bb_std
+            },
+            "signals": signals
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get candles with indicators for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ===== DATA MANAGEMENT ENDPOINTS =====
 

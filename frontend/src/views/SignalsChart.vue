@@ -220,6 +220,11 @@
         </div>
       </div>
 
+      <!-- Управление индикаторами -->
+      <div v-if="selectedTicker" class="mb-6 slide-up">
+        <IndicatorsControl v-model="indicators" />
+      </div>
+
       <!-- График -->
       <div class="mb-6 slide-up">
         <div class="chart-container">
@@ -232,10 +237,10 @@
                   ({{ chartDays }} дн. / {{ signalsDays }} дн. сигналов)
                 </span>
               </h2>
-              
+
               <!-- Управление сигналами на графике -->
               <div class="flex items-center space-x-2">
-                <button 
+                <button
                   @click="toggleSignalsOnChart"
                   :class="showSignalsOnChart ? 'bg-trading-green text-black' : 'bg-gray-600 text-white'"
                   class="px-3 py-1 text-sm rounded transition-all duration-300 hover:scale-105"
@@ -258,6 +263,7 @@
               :candles-error="candlesError"
               :signals-error="signalsError"
               :chart-height="400"
+              :indicators="indicators"
               @retry="handleRefresh"
               class="rounded-lg"
             />
@@ -389,6 +395,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTradingStore } from '../stores/tradingStore.js'
 import { tradingAPI } from '../services/api'
 import UnifiedTradingChart from '../components/charts/UnifiedTradingChart.vue'
+import IndicatorsControl from '../components/charts/IndicatorsControl.vue'
 import SignalCard from '../components/SignalCard.vue'
 
 // Router
@@ -397,6 +404,33 @@ const router = useRouter()
 
 // Store
 const store = useTradingStore()
+
+// Indicators state
+const indicators = ref({
+  rsi: {
+    enabled: false,
+    period: 14,
+    color: '#2962FF'
+  },
+  macd: {
+    enabled: false,
+    fastPeriod: 12,
+    slowPeriod: 26,
+    signalPeriod: 9,
+    macdColor: '#2962FF',
+    signalColor: '#FF6D00'
+  },
+  bollingerBands: {
+    enabled: false,
+    period: 20,
+    stdDev: 2,
+    color: '#089981'
+  },
+  obv: {
+    enabled: false,
+    color: '#9C27B0'
+  }
+})
 
 const selectedTicker = computed({
   get: () => store.selectedTicker,
