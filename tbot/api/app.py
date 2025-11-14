@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 from enum import Enum
+from sqlalchemy import and_
 from analysis.consensus_detector import get_consensus_detector
 from analysis.message_parser import MessageParser, MessageParsingService
 from core.database import Database
@@ -17,7 +18,6 @@ from integrations.tinkoff_integration import TinkoffIntegration
 from integrations.historical_data_loader import HistoricalDataLoader
 from utils.datetime_utils import now_utc, utc_from_days_ago, ensure_timezone_aware, days_between_utc
 from integrations.telegram_scraper import TelegramScraper
-from integrations.telegram_channels_config import CHANNELS, SCRAPER_CONFIG
 import re
 
 # Настройка логирования
@@ -80,6 +80,12 @@ async def lifespan(app: FastAPI):
         # Инициализируем БД
         database_url = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/trader_tracker")
         db_manager = Database(database_url)
+
+        # Создаем таблицы если их нет
+        from core.database.migrations import create_tables
+        create_tables(db_manager.engine)
+        logger.info("✅ Database tables checked/created")
+
         message_parsing_service = MessageParsingService(
             db_manager=db_manager,
             parser=MessageParser(db_manager)
@@ -110,7 +116,7 @@ async def lifespan(app: FastAPI):
         # Инициализация Telegram Scraper
         telegram_api_id = os.getenv("tg_api_id")
         telegram_api_hash = os.getenv("tg_api_hash")
-        
+
         if telegram_api_id and telegram_api_hash:
             try:
                 telegram_scraper = TelegramScraper(
@@ -118,16 +124,21 @@ async def lifespan(app: FastAPI):
                     api_hash=telegram_api_hash,
                     db_manager=db_manager
                 )
-                
+
                 if await telegram_scraper.initialize():
-                    for channel in CHANNELS:
-                        await telegram_scraper.add_channel(
-                            channel_id=channel['id'],
-                            name=channel['name'],
-                            enabled=channel['enabled']
-                        )
-                    
-                    logger.info("✅ Telegram scraper initialized")
+                    # Загружаем каналы из БД
+                    channels_from_db = db_manager.get_channels(enabled_only=False)
+
+                    if channels_from_db:
+                        for channel in channels_from_db:
+                            await telegram_scraper.add_channel(
+                                channel_id=channel['channel_id'],
+                                name=channel['name'],
+                                enabled=channel['is_enabled']
+                            )
+                        logger.info(f"✅ Telegram scraper initialized with {len(channels_from_db)} channels from DB")
+                    else:
+                        logger.info("✅ Telegram scraper initialized (no channels in DB yet)")
                 else:
                     telegram_scraper = None
                     logger.warning("⚠️ Telegram scraper failed to initialize")
@@ -713,44 +724,6 @@ async def parse_all_messages(
         logger.error(f"Failed to start parsing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/messages/reparse-all")
-async def reparse_all_messages(
-    background_tasks: BackgroundTasks,
-    force: bool = Query(False, description="Пересоздать все сигналы (удалит старые)")
-):
-    """Полный репарсинг всех сырых сообщений"""
-    try:
-        db = get_db_manager()
-        
-        # Получаем статистику перед репарсингом
-        total_messages = db.get_total_messages_count()
-        
-        if total_messages == 0:
-            raise HTTPException(status_code=400, detail="No messages to reparse")
-        
-        # Запускаем репарсинг в фоне
-        background_tasks.add_task(
-            reparse_all_messages_task,
-            db,
-            force
-        )
-        
-        return {
-            "status": "started",
-            "message": f"Reparsing {total_messages} messages started in background",
-            "total_messages": total_messages,
-            "force_mode": force,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to start reparse: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Добавь ПОСЛЕ @app.post("/api/patterns/test")
-
 @app.post("/api/patterns/{pattern_id}/test-on-messages")
 async def test_pattern_on_real_messages(
     pattern_id: int,
@@ -1033,7 +1006,7 @@ async def get_failed_messages(
             query = session.query(RawMessage).filter(
                 RawMessage.is_processed == True,
                 RawMessage.parse_success == False
-            ).order_by(desc(RawMessage.timestamp))
+            ).order_by(RawMessage.timestamp.desc())
             
             total_count = query.count()
             
@@ -1376,6 +1349,243 @@ async def trigger_consensus_detection(
         logger.error(f"Failed to trigger consensus detection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ===== CONSENSUS RULES ENDPOINTS =====
+
+@app.get("/api/consensus/rules")
+async def get_consensus_rules(
+    active_only: bool = Query(False, description="Только активные правила")
+):
+    """Получить список правил консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            query = session.query(ConsensusRule)
+
+            if active_only:
+                query = query.filter(ConsensusRule.is_active == True)
+
+            rules = query.order_by(ConsensusRule.priority.desc(), ConsensusRule.created_at.desc()).all()
+
+            result = []
+            for rule in rules:
+                result.append({
+                    'id': rule.id,
+                    'name': rule.name,
+                    'description': rule.description,
+                    'is_active': rule.is_active,
+                    'priority': rule.priority,
+                    'min_traders': rule.min_traders,
+                    'window_minutes': rule.window_minutes,
+                    'strict_consensus': rule.strict_consensus,
+                    'ticker_filter': rule.ticker_filter,
+                    'direction_filter': rule.direction_filter,
+                    'min_confidence': rule.min_confidence,
+                    'min_strength': rule.min_strength,
+                    'notification_settings': rule.notification_settings,
+                    'config': rule.config,
+                    'created_at': rule.created_at.isoformat() if rule.created_at else None,
+                    'updated_at': rule.updated_at.isoformat() if rule.updated_at else None,
+                    'created_by': rule.created_by
+                })
+
+            return {
+                'count': len(result),
+                'rules': result
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get consensus rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/consensus/rules")
+async def create_consensus_rule(rule_data: Dict):
+    """Создать новое правило консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            # Проверка на уникальность имени
+            existing = session.query(ConsensusRule).filter(
+                ConsensusRule.name == rule_data['name']
+            ).first()
+
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Rule with name '{rule_data['name']}' already exists")
+
+            rule = ConsensusRule(
+                name=rule_data['name'],
+                description=rule_data.get('description'),
+                is_active=rule_data.get('is_active', True),
+                priority=rule_data.get('priority', 0),
+                min_traders=rule_data.get('min_traders', 2),
+                window_minutes=rule_data.get('window_minutes', 10),
+                strict_consensus=rule_data.get('strict_consensus', True),
+                ticker_filter=rule_data.get('ticker_filter'),
+                direction_filter=rule_data.get('direction_filter'),
+                min_confidence=rule_data.get('min_confidence'),
+                min_strength=rule_data.get('min_strength'),
+                notification_settings=rule_data.get('notification_settings'),
+                config=rule_data.get('config'),
+                created_by=rule_data.get('created_by', 'web_ui')
+            )
+
+            session.add(rule)
+            session.commit()
+
+            logger.info(f"✅ Consensus rule created: {rule.name} (id={rule.id})")
+
+            return {
+                'id': rule.id,
+                'name': rule.name,
+                'message': 'Rule created successfully'
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consensus/rules/{rule_id}")
+async def get_consensus_rule(rule_id: int):
+    """Получить детали правила консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            rule = session.query(ConsensusRule).filter(ConsensusRule.id == rule_id).first()
+
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+            return {
+                'id': rule.id,
+                'name': rule.name,
+                'description': rule.description,
+                'is_active': rule.is_active,
+                'priority': rule.priority,
+                'min_traders': rule.min_traders,
+                'window_minutes': rule.window_minutes,
+                'strict_consensus': rule.strict_consensus,
+                'ticker_filter': rule.ticker_filter,
+                'direction_filter': rule.direction_filter,
+                'min_confidence': rule.min_confidence,
+                'min_strength': rule.min_strength,
+                'notification_settings': rule.notification_settings,
+                'config': rule.config,
+                'created_at': rule.created_at.isoformat() if rule.created_at else None,
+                'updated_at': rule.updated_at.isoformat() if rule.updated_at else None,
+                'created_by': rule.created_by
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/consensus/rules/{rule_id}")
+async def update_consensus_rule(rule_id: int, rule_data: Dict):
+    """Обновить правило консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            rule = session.query(ConsensusRule).filter(ConsensusRule.id == rule_id).first()
+
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+            # Обновляем только переданные поля
+            if 'name' in rule_data and rule_data['name'] != rule.name:
+                # Проверяем уникальность нового имени
+                existing = session.query(ConsensusRule).filter(
+                    ConsensusRule.name == rule_data['name'],
+                    ConsensusRule.id != rule_id
+                ).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail=f"Rule with name '{rule_data['name']}' already exists")
+                rule.name = rule_data['name']
+
+            if 'description' in rule_data:
+                rule.description = rule_data['description']
+            if 'is_active' in rule_data:
+                rule.is_active = rule_data['is_active']
+            if 'priority' in rule_data:
+                rule.priority = rule_data['priority']
+            if 'min_traders' in rule_data:
+                rule.min_traders = rule_data['min_traders']
+            if 'window_minutes' in rule_data:
+                rule.window_minutes = rule_data['window_minutes']
+            if 'strict_consensus' in rule_data:
+                rule.strict_consensus = rule_data['strict_consensus']
+            if 'ticker_filter' in rule_data:
+                rule.ticker_filter = rule_data['ticker_filter']
+            if 'direction_filter' in rule_data:
+                rule.direction_filter = rule_data['direction_filter']
+            if 'min_confidence' in rule_data:
+                rule.min_confidence = rule_data['min_confidence']
+            if 'min_strength' in rule_data:
+                rule.min_strength = rule_data['min_strength']
+            if 'notification_settings' in rule_data:
+                rule.notification_settings = rule_data['notification_settings']
+            if 'config' in rule_data:
+                rule.config = rule_data['config']
+
+            session.commit()
+
+            logger.info(f"✅ Consensus rule updated: {rule.name} (id={rule.id})")
+
+            return {
+                'id': rule.id,
+                'name': rule.name,
+                'message': 'Rule updated successfully'
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/consensus/rules/{rule_id}")
+async def delete_consensus_rule(rule_id: int):
+    """Удалить правило консенсуса"""
+    try:
+        from core.database.models import ConsensusRule
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            rule = session.query(ConsensusRule).filter(ConsensusRule.id == rule_id).first()
+
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+            rule_name = rule.name
+            session.delete(rule)
+            session.commit()
+
+            logger.info(f"✅ Consensus rule deleted: {rule_name} (id={rule_id})")
+
+            return {
+                'message': f'Rule "{rule_name}" deleted successfully'
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete consensus rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get("/api/consensus/{consensus_id}")
 async def get_consensus_details(consensus_id: str):
     """Получение детальной информации о консенсусе"""
@@ -1418,6 +1628,7 @@ async def get_consensus_details(consensus_id: str):
                 'traders_count': event.traders_count,
                 'window_minutes': event.window_minutes,
                 'consensus_strength': event.consensus_strength,
+                'rule_id': event.rule_id,
                 'first_signal_at': event.first_signal_at.isoformat(),
                 'last_signal_at': event.last_signal_at.isoformat(),
                 'detected_at': event.detected_at.isoformat(),
@@ -1605,6 +1816,7 @@ async def get_consensus_events(
                     'signals_count': signals_count,
                     'window_minutes': event.window_minutes,
                     'consensus_strength': event.consensus_strength,
+                    'rule_id': event.rule_id,
                     'first_signal_at': event.first_signal_at.isoformat(),
                     'last_signal_at': event.last_signal_at.isoformat(),
                     'detected_at': event.detected_at.isoformat(),
@@ -1676,6 +1888,7 @@ async def manual_consensus_detection(ticker: Optional[str] = None, hours_back: i
             
     except Exception as e:
         logger.error(f"Manual consensus detection failed: {e}", exc_info=True)
+
 
 # ===== TELEGRAM SCRAPER ENDPOINTS =====
 
@@ -1787,146 +2000,8 @@ if __name__ == "__main__":
         log_level="info"
     )
 
-# Добавьте эти эндпоинты в tbot/api/app.py после существующих Telegram эндпоинтов
+# ===== TELEGRAM CHANNEL MANAGEMENT (DB-BASED) =====
 
-@app.get("/api/telegram/channels")
-async def get_telegram_channels():
-    """Получить список всех каналов"""
-    if not telegram_scraper:
-        raise HTTPException(status_code=503, detail="Telegram scraper not initialized")
-    
-    channels_list = []
-    for channel_id, channel_data in telegram_scraper.channels.items():
-        channels_list.append({
-            'id': channel_id,
-            'name': channel_data['name'],
-            'enabled': channel_data['enabled'],
-            'last_message_id': channel_data['last_message_id'],
-            'total_collected': channel_data['total_collected']
-        })
-    
-    return {
-        "channels": channels_list,
-        "count": len(channels_list)
-    }
-
-@app.post("/api/telegram/channels")
-async def add_telegram_channel(
-    channel_id: int = Query(..., description="ID канала"),
-    name: str = Query(..., description="Название канала"),
-    enabled: bool = Query(True, description="Включить канал")
-):
-    """Добавить новый канал для мониторинга"""
-    if not telegram_scraper:
-        raise HTTPException(status_code=503, detail="Telegram scraper not initialized")
-    
-    try:
-        success = await telegram_scraper.add_channel(
-            channel_id=channel_id,
-            name=name,
-            enabled=enabled
-        )
-        
-        if success:
-            return {
-                "status": "success",
-                "message": f"Channel {name} added successfully",
-                "channel_id": channel_id
-            }
-        else:
-            raise HTTPException(status_code=400, detail="Failed to add channel")
-    except Exception as e:
-        logger.error(f"Failed to add channel: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/api/telegram/channels/{channel_id}")
-async def update_telegram_channel(
-    channel_id: int,
-    name: Optional[str] = Query(None, description="Новое название"),
-    enabled: Optional[bool] = Query(None, description="Включить/выключить")
-):
-    """Обновить настройки канала"""
-    if not telegram_scraper:
-        raise HTTPException(status_code=503, detail="Telegram scraper not initialized")
-    
-    if channel_id not in telegram_scraper.channels:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    
-    channel = telegram_scraper.channels[channel_id]
-    
-    if name is not None:
-        channel['name'] = name
-    if enabled is not None:
-        channel['enabled'] = enabled
-    
-    return {
-        "status": "success",
-        "channel_id": channel_id,
-        "updated_fields": {
-            "name": name if name is not None else channel['name'],
-            "enabled": enabled if enabled is not None else channel['enabled']
-        }
-    }
-
-@app.delete("/api/telegram/channels/{channel_id}")
-async def delete_telegram_channel(channel_id: int):
-    """Удалить канал"""
-    if not telegram_scraper:
-        raise HTTPException(status_code=503, detail="Telegram scraper not initialized")
-    
-    if channel_id not in telegram_scraper.channels:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    
-    channel_name = telegram_scraper.channels[channel_id]['name']
-    del telegram_scraper.channels[channel_id]
-    
-    return {
-        "status": "success",
-        "message": f"Channel {channel_name} deleted",
-        "channel_id": channel_id
-    }
-
-@app.get("/api/messages/unparsed")
-async def get_unparsed_messages(
-    limit: int = Query(1, ge=1, le=1000, description="Лимит")
-):
-    """Получить количество неразобранных сообщений"""
-    try:
-        db = get_db_manager()
-        messages = db.get_unparsed_messages(limit=limit)
-        
-        return {
-            "count": len(messages),
-            "messages": messages if limit > 1 else []
-        }
-    except Exception as e:
-        logger.error(f"Failed to get unparsed messages: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-async def add_channel_runtime(self, channel_id: int, name: str, enabled: bool = True) -> bool:
-    """Добавить канал во время работы (без перезапуска)"""
-    try:
-        if not self.client:
-            logger.error("Client not initialized")
-            return False
-        
-        entity = await self.client.get_entity(channel_id)
-        
-        self.channels[channel_id] = {
-            'name': name,
-            'enabled': enabled,
-            'entity': entity,
-            'last_message_id': None,
-            'total_collected': 0
-        }
-        
-        logger.info(f"✅ Channel added at runtime: {name} (ID: {channel_id})")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to add channel at runtime: {e}")
-        return False
-    
 @app.get("/api/telegram/channels/{channel_id}/messages")
 async def get_channel_messages(
     channel_id: int,

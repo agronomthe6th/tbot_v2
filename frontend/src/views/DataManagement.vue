@@ -1,5 +1,6 @@
 <template>
-  <div class="min-h-screen bg-trading-dark p-6">
+  <div class="data-management-page">
+    <div class="min-h-screen bg-trading-dark p-6">
     <div class="max-w-7xl mx-auto">
       <h1 class="text-3xl font-bold text-white mb-6">📊 Управление данными</h1>
       
@@ -170,8 +171,8 @@
           <div class="bg-trading-bg rounded-lg p-4 border border-trading-border">
             <div class="text-sm text-gray-400 mb-1">Успешность</div>
             <div class="text-2xl font-bold text-purple-400">
-              {{ signalStats?.successfully_parsed && signalStats?.total_messages 
-                ? Math.round((signalStats.successfully_parsed / signalStats.processed_messages) * 100) 
+              {{ signalStats?.processed_messages > 0
+                ? Math.round((signalStats.successfully_parsed / signalStats.processed_messages) * 100)
                 : 0 }}%
             </div>
           </div>
@@ -229,7 +230,7 @@
 
           <div v-if="parsingComplete && parsingResult" class="bg-green-900 bg-opacity-20 border border-green-700 rounded-lg p-4">
             <div class="text-green-300 font-semibold mb-2">✅ Обработка завершена</div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
               <div>
                 <div class="text-gray-400">Обработано:</div>
                 <div class="text-white font-semibold">{{ parsingResult.total_processed || 0 }}</div>
@@ -245,6 +246,24 @@
               <div>
                 <div class="text-gray-400">Ошибки:</div>
                 <div class="text-red-400 font-semibold">{{ parsingResult.failed_parses || 0 }}</div>
+              </div>
+            </div>
+
+            <!-- Детали ошибок -->
+            <div v-if="parsingResult.errors && parsingResult.errors.length > 0" class="mt-3 pt-3 border-t border-green-700">
+              <div class="text-yellow-300 font-semibold text-xs mb-2">⚠️ Детали ошибок:</div>
+              <div class="max-h-32 overflow-y-auto space-y-1">
+                <div
+                  v-for="(err, idx) in parsingResult.errors.slice(0, 10)"
+                  :key="idx"
+                  class="text-xs text-gray-300 bg-red-900 bg-opacity-20 rounded px-2 py-1"
+                >
+                  <span v-if="err.message_id" class="text-yellow-400">Msg #{{ err.message_id }}:</span>
+                  <span class="text-red-300">{{ err.error }}</span>
+                </div>
+                <div v-if="parsingResult.errors.length > 10" class="text-xs text-gray-400 italic">
+                  ... и еще {{ parsingResult.errors.length - 10 }} ошибок
+                </div>
               </div>
             </div>
           </div>
@@ -273,19 +292,19 @@
   </div>
 
   <!-- Add Channel Modal -->
-  <div 
-    v-if="showAddChannelModal" 
+  <div
+    v-if="showAddChannelModal"
     class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
     @click.self="showAddChannelModal = false"
   >
     <div class="bg-trading-card rounded-lg p-6 max-w-md w-full border border-trading-border">
       <h3 class="text-xl font-bold text-white mb-4">➕ Добавить канал</h3>
-      
+
       <div class="space-y-4">
         <div>
           <label class="block text-gray-400 text-sm mb-2">Channel ID *</label>
-          <input 
-            v-model="newChannel.channel_id" 
+          <input
+            v-model="newChannel.channel_id"
             type="number"
             placeholder="-1001234567890"
             class="w-full bg-white border border-trading-border rounded px-4 py-2 text-black focus:outline-none focus:border-trading-green"
@@ -295,8 +314,8 @@
 
         <div>
           <label class="block text-gray-400 text-sm mb-2">Название канала *</label>
-          <input 
-            v-model="newChannel.name" 
+          <input
+            v-model="newChannel.name"
             type="text"
             placeholder="Crypto Signals"
             class="w-full bg-white border border-trading-border rounded px-4 py-2 text-black focus:outline-none focus:border-trading-green"
@@ -305,8 +324,8 @@
 
         <div>
           <label class="block text-gray-400 text-sm mb-2">Username (необязательно)</label>
-          <input 
-            v-model="newChannel.username" 
+          <input
+            v-model="newChannel.username"
             type="text"
             placeholder="cryptosignals"
             class="w-full bg-white border border-trading-border rounded px-4 py-2 text-black focus:outline-none focus:border-trading-green"
@@ -315,8 +334,8 @@
         </div>
 
         <div class="flex items-center">
-          <input 
-            v-model="newChannel.enabled" 
+          <input
+            v-model="newChannel.enabled"
             type="checkbox"
             id="channel-enabled"
             class="w-4 h-4 text-trading-green bg-trading-dark border-trading-border rounded focus:ring-trading-green"
@@ -326,14 +345,14 @@
       </div>
 
       <div class="flex gap-3 mt-6">
-        <button 
+        <button
           @click="addChannel"
           :disabled="!newChannel.channel_id || !newChannel.name || addingChannel"
           class="flex-1 px-4 py-2 bg-trading-green hover:bg-green-600 text-white rounded font-semibold disabled:opacity-50 transition-colors"
         >
           {{ addingChannel ? '⏳ Добавление...' : '✓ Добавить' }}
         </button>
-        <button 
+        <button
           @click="showAddChannelModal = false"
           class="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded font-semibold transition-colors"
         >
@@ -341,6 +360,7 @@
         </button>
       </div>
     </div>
+  </div>
   </div>
 </template>
 
@@ -530,25 +550,26 @@ async function parseMessages() {
     parsing.value = true
     parsingComplete.value = false
     parsingResult.value = null
-    
+
     const response = await tradingAPI.messages.parseAll(parseLimit.value)
-    
-    showNotification('✅ Парсинг запущен')
-    
-    setTimeout(async () => {
-      await refreshStats()
-      parsing.value = false
-      parsingComplete.value = true
-      
-      const stats = await tradingAPI.getSignalsStats()
-      parsingResult.value = stats
-      
-      setTimeout(() => {
-        parsingComplete.value = false
-        parsingResult.value = null
-      }, 10000)
-    }, 3000)
-    
+
+    // Используем результат из ответа API
+    parsingResult.value = response
+
+    showNotification(`✅ Парсинг завершён: ${response.successful_parses || 0} успешно`)
+
+    // Обновляем статистику
+    await refreshStats()
+
+    parsing.value = false
+    parsingComplete.value = true
+
+    // Скрываем результаты через 15 секунд
+    setTimeout(() => {
+      parsingComplete.value = false
+      parsingResult.value = null
+    }, 15000)
+
   } catch (error) {
     console.error('Failed to parse messages:', error)
     showNotification(`❌ Ошибка: ${error.message}`, 'error')
@@ -625,28 +646,3 @@ onBeforeUnmount(() => {
   }
 })
 </script>
-
-<style scoped>
-.transition-colors {
-  transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.bg-green-900 {
-  animation: fadeIn 0.3s ease-out;
-}
-
-.bg-blue-900 {
-  animation: fadeIn 0.3s ease-out;
-}
-</style>

@@ -167,10 +167,6 @@ const isMobileMenuOpen = ref(false)
 
 <style scoped>
 .router-link-active {
-  color: #00d4aa;
-}
-
-.transition-colors {
-  transition: color 0.2s ease-in-out;
+  color: var(--trading-green);
 }
 </style>

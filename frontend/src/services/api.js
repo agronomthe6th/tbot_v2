@@ -317,17 +317,89 @@ export const tradingAPI = {
   async triggerConsensusDetection(ticker = null, hours_back = 24) {
     try {
       console.log(`🌐 API: Triggering consensus detection (ticker: ${ticker}, hours: ${hours_back})`)
-      
+
       const params = { hours_back }
       if (ticker) params.ticker = ticker
-      
+
       const response = await api.post('/api/consensus/detect', null, { params })
-      
+
       console.log('✅ API: Consensus detection triggered:', response.data)
       return response.data
     } catch (error) {
       console.error('❌ API: Consensus detection error:', error.response?.data)
       throw new Error(error.response?.data?.detail || 'Failed to trigger consensus detection')
+    }
+  },
+
+  // ===== 📋 CONSENSUS RULES METHODS =====
+  async getConsensusRules(active_only = false) {
+    try {
+      console.log(`🌐 API: Getting consensus rules (active_only: ${active_only})`)
+
+      const params = { active_only }
+      const response = await api.get('/api/consensus/rules', { params })
+
+      console.log('✅ API: Consensus rules response:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Consensus rules error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to fetch consensus rules')
+    }
+  },
+
+  async getConsensusRule(rule_id) {
+    try {
+      console.log(`🌐 API: Getting consensus rule ${rule_id}`)
+
+      const response = await api.get(`/api/consensus/rules/${rule_id}`)
+
+      console.log('✅ API: Consensus rule response:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Consensus rule ${rule_id} error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || `Failed to fetch rule ${rule_id}`)
+    }
+  },
+
+  async createConsensusRule(ruleData) {
+    try {
+      console.log('🌐 API: Creating consensus rule:', ruleData)
+
+      const response = await api.post('/api/consensus/rules', ruleData)
+
+      console.log('✅ API: Consensus rule created:', response.data)
+      return response.data
+    } catch (error) {
+      console.error('❌ API: Create consensus rule error:', error.response?.data)
+      throw new Error(error.response?.data?.detail || 'Failed to create consensus rule')
+    }
+  },
+
+  async updateConsensusRule(rule_id, ruleData) {
+    try {
+      console.log(`🌐 API: Updating consensus rule ${rule_id}:`, ruleData)
+
+      const response = await api.put(`/api/consensus/rules/${rule_id}`, ruleData)
+
+      console.log('✅ API: Consensus rule updated:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Update consensus rule ${rule_id} error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || `Failed to update rule ${rule_id}`)
+    }
+  },
+
+  async deleteConsensusRule(rule_id) {
+    try {
+      console.log(`🌐 API: Deleting consensus rule ${rule_id}`)
+
+      const response = await api.delete(`/api/consensus/rules/${rule_id}`)
+
+      console.log('✅ API: Consensus rule deleted:', response.data)
+      return response.data
+    } catch (error) {
+      console.error(`❌ API: Delete consensus rule ${rule_id} error:`, error.response?.data)
+      throw new Error(error.response?.data?.detail || `Failed to delete rule ${rule_id}`)
     }
   },
 

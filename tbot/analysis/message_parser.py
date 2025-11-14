@@ -3,8 +3,10 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from uuid import UUID
 
 from .pattern_manager import PatternManager
+from .consensus_detector import get_consensus_detector
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +449,7 @@ class MessageParser:
 
 class MessageParsingService:
     """Сервис для массовой обработки сообщений"""
-    
+
     def __init__(self, db_manager, parser: MessageParser = None):
         """
         Args:
@@ -456,6 +458,8 @@ class MessageParsingService:
         """
         self.db = db_manager
         self.parser = parser or MessageParser(db_manager)
+        self.consensus_detector = get_consensus_detector(db_manager)
+        logger.info("MessageParsingService initialized with consensus detector")
     
     def parse_message(self, message: Dict) -> ParseResult:
         """
@@ -507,6 +511,15 @@ class MessageParsingService:
                             stats['successful_parses'] += 1
                             stats['trading_messages'] += 1
                             self.db.mark_message_processed(message['id'], parse_success=True)
+
+                            # Проверяем консенсус для нового сигнала
+                            try:
+                                signal_uuid = UUID(signal_id) if isinstance(signal_id, str) else signal_id
+                                consensus_result = self.consensus_detector.check_new_signal_sync(signal_uuid)
+                                if consensus_result:
+                                    logger.info(f"🔥 Consensus created: {consensus_result}")
+                            except Exception as consensus_error:
+                                logger.error(f"Failed to check consensus for signal {signal_id}: {consensus_error}")
                         else:
                             stats['failed_parses'] += 1
                             self.db.mark_message_processed(message['id'], parse_success=False)
