@@ -7,11 +7,13 @@ import logging
 import os
 from pathlib import Path
 
-# Добавляем путь к модулю tbot
-sys.path.insert(0, str(Path(__file__).parent))
+# Добавляем путь к модулю tbot - нужно добавить папку tbot в sys.path
+# чтобы относительные импорты в database.py работали корректно
+tbot_path = Path(__file__).parent / 'tbot'
+sys.path.insert(0, str(tbot_path))
 
-from tbot.core.database import Database
-from tbot.core.database.migrations import migrate_consensus_improvements
+from core.database import Database
+from core.database.migrations import migrate_consensus_improvements
 
 logging.basicConfig(
     level=logging.INFO,
