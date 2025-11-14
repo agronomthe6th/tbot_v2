@@ -4,12 +4,13 @@
 """
 import sys
 import logging
+import os
 from pathlib import Path
 
 # Добавляем путь к модулю tbot
 sys.path.insert(0, str(Path(__file__).parent))
 
-from tbot.core.database.database import get_db_manager
+from tbot.core.database import Database
 from tbot.core.database.migrations import migrate_consensus_improvements
 
 logging.basicConfig(
@@ -24,18 +25,23 @@ def main():
     logger.info("🚀 Starting consensus improvements migration...")
 
     try:
-        # Получаем экземпляр БД
-        db = get_db_manager()
-        engine = db.engine
+        # Получаем URL базы данных из переменных окружения
+        database_url = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/trader_tracker")
+        logger.info(f"Connecting to database...")
+
+        # Создаем экземпляр Database
+        db = Database(database_url)
 
         # Запускаем миграцию
-        success = migrate_consensus_improvements(engine)
+        success = migrate_consensus_improvements(db.engine)
 
         if success:
             logger.info("✅ Migration completed successfully!")
+            db.close()
             return 0
         else:
             logger.error("❌ Migration failed!")
+            db.close()
             return 1
 
     except Exception as e:
