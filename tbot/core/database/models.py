@@ -347,6 +347,15 @@ class ConsensusRule(Base):
     # Критерии силы
     min_strength = Column(Integer)  # Минимальная сила консенсуса для создания события
 
+    # Технические индикаторы (новое!)
+    indicator_conditions = Column(JSONB)  # Условия по индикаторам
+    # Пример: {
+    #   "rsi": {"min": 30, "max": 70, "enabled": true},
+    #   "macd": {"signal": "bullish_crossover", "enabled": true},
+    #   "bollinger": {"signal": "at_lower_band", "enabled": false},
+    #   "obv": {"signal": "accumulation", "enabled": false}
+    # }
+
     # Метаданные
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -362,10 +371,49 @@ class ConsensusRule(Base):
         Index('idx_consensus_rule_active_priority', 'is_active', 'priority'),
     )
 
+class ConsensusBacktest(Base):
+    """Результаты бэктестинга правил консенсуса"""
+    __tablename__ = 'consensus_backtests'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(Integer, ForeignKey('consensus_rules.id'), nullable=False, index=True)
+
+    # Параметры бэктеста
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    end_date = Column(DateTime(timezone=True), nullable=False)
+    tickers = Column(String(500))  # Список тикеров через запятую или NULL для всех
+
+    # Результаты
+    total_consensus_found = Column(Integer, default=0)  # Всего найдено консенсусов
+    profitable_count = Column(Integer, default=0)  # Количество прибыльных
+    loss_count = Column(Integer, default=0)  # Количество убыточных
+
+    # Метрики
+    win_rate = Column(Numeric(5, 2))  # Процент прибыльных сделок
+    avg_profit_pct = Column(Numeric(8, 4))  # Средняя прибыль в %
+    avg_loss_pct = Column(Numeric(8, 4))  # Средний убыток в %
+    max_profit_pct = Column(Numeric(8, 4))  # Максимальная прибыль
+    max_loss_pct = Column(Numeric(8, 4))  # Максимальный убыток
+    total_return_pct = Column(Numeric(8, 4))  # Общая доходность
+
+    # Детали (JSON)
+    results_by_ticker = Column(JSONB)  # Результаты по каждому тикеру
+    consensus_details = Column(JSONB)  # Детали каждого консенсуса
+
+    # Метаданные
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    execution_time_seconds = Column(Numeric(10, 2))  # Время выполнения
+    status = Column(String(20), default='completed')  # completed, failed, running
+
+    __table_args__ = (
+        Index('idx_backtest_rule_created', 'rule_id', 'created_at'),
+        Index('idx_backtest_status', 'status'),
+    )
+
 class TelegramChannel(Base):
     """Telegram каналы для мониторинга"""
     __tablename__ = 'telegram_channels'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     channel_id = Column(BigInteger, unique=True, nullable=False)
     name = Column(String(255), nullable=False)
@@ -373,10 +421,10 @@ class TelegramChannel(Base):
     is_enabled = Column(Boolean, default=True, nullable=False)
     last_message_id = Column(BigInteger)
     total_collected = Column(Integer, default=0, nullable=False)
-    
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+
     __table_args__ = (
         Index('idx_telegram_channels_channel_id', 'channel_id'),
         Index('idx_telegram_channels_is_enabled', 'is_enabled'),

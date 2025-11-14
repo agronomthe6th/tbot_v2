@@ -3,7 +3,7 @@
 Функции для создания и обновления схемы БД
 """
 import logging
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, text
 from .models import Base
 
 logger = logging.getLogger(__name__)
@@ -67,3 +67,55 @@ def get_table_info(engine) -> dict:
     except Exception as e:
         logger.error(f"❌ Failed to get table info: {e}")
         return {}
+
+def migrate_consensus_improvements(engine):
+    """
+    Миграция для улучшений системы консенсусов:
+    - Добавление поля indicator_conditions в consensus_rules
+    - Создание таблицы consensus_backtests
+
+    Args:
+        engine: SQLAlchemy engine
+    """
+    try:
+        with engine.connect() as conn:
+            # Проверяем существует ли колонка indicator_conditions
+            result = conn.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'consensus_rules'
+                AND column_name = 'indicator_conditions'
+            """))
+
+            if not result.fetchone():
+                logger.info("Adding indicator_conditions column to consensus_rules...")
+                conn.execute(text("""
+                    ALTER TABLE consensus_rules
+                    ADD COLUMN indicator_conditions JSONB
+                """))
+                conn.commit()
+                logger.info("✅ Added indicator_conditions column")
+            else:
+                logger.info("Column indicator_conditions already exists")
+
+            # Проверяем существует ли таблица consensus_backtests
+            result = conn.execute(text("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'consensus_backtests'
+            """))
+
+            if not result.fetchone():
+                logger.info("Creating consensus_backtests table...")
+                # Используем create_all для создания новой таблицы
+                Base.metadata.create_all(engine, tables=[Base.metadata.tables['consensus_backtests']])
+                logger.info("✅ Created consensus_backtests table")
+            else:
+                logger.info("Table consensus_backtests already exists")
+
+        logger.info("✅ Consensus improvements migration completed successfully")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Migration failed: {e}", exc_info=True)
+        return False
