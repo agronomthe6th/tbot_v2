@@ -108,6 +108,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { createChart } from 'lightweight-charts'
+import TechnicalIndicators from '@/utils/technicalIndicators.js'
 
 // Props
 const props = defineProps({
@@ -150,6 +151,15 @@ const props = defineProps({
   chartHeight: {
     type: Number,
     default: 500
+  },
+  indicators: {
+    type: Object,
+    default: () => ({
+      rsi: { enabled: false },
+      macd: { enabled: false },
+      bollingerBands: { enabled: false },
+      obv: { enabled: false }
+    })
   }
 })
 
@@ -162,6 +172,21 @@ const chartContainer = ref(null)
 // Chart instances
 let chart = null
 let candlestickSeries = null
+
+// Indicator series
+let bbUpperSeries = null
+let bbMiddleSeries = null
+let bbLowerSeries = null
+let rsiSeries = null
+let macdSeries = null
+let macdSignalSeries = null
+let macdHistogramSeries = null
+let obvSeries = null
+
+// Indicator line references for level lines
+let rsiOverboughtLine = null
+let rsiOversoldLine = null
+let macdZeroLine = null
 
 // Computed
 const anyError = computed(() => {
@@ -304,17 +329,20 @@ function updateChartData() {
     // Преобразуем и сортируем данные по времени
     const processedData = props.candlesData.map(candle => ({
       ...candle,
-      time: typeof candle.time === 'string' 
+      time: typeof candle.time === 'string'
         ? Math.floor(new Date(candle.time).getTime() / 1000)
         : candle.time
     })).sort((a, b) => a.time - b.time)
-    
+
     console.log(`📊 Updating chart with ${processedData.length} candles`)
     console.log('🔍 Sample candle time format:', processedData[0]?.time, typeof processedData[0]?.time)
-    
+
     // Обновляем данные свечей
     candlestickSeries.setData(processedData)
-    
+
+    // Обновляем индикаторы
+    updateIndicators(processedData)
+
     // Если нужно показывать сигналы - добавляем маркеры
     if (props.showSignals && props.signalsData && props.signalsData.length > 0) {
       updateSignalsMarkers()
@@ -322,13 +350,289 @@ function updateChartData() {
       // Очищаем маркеры если сигналы не нужны
       candlestickSeries.setMarkers([])
     }
-    
+
     // Автомасштабирование
     chart.timeScale().fitContent()
-    
+
     console.log(`✅ Chart updated successfully`)
   } catch (error) {
     console.error('❌ Error updating chart:', error)
+  }
+}
+
+function updateIndicators(processedData) {
+  if (!processedData || processedData.length === 0) {
+    return
+  }
+
+  try {
+    // Вычисляем индикаторы
+    const indicatorsData = TechnicalIndicators.calculateAllIndicators(processedData, {
+      rsiPeriod: props.indicators.rsi.period || 14,
+      macdFast: props.indicators.macd.fastPeriod || 12,
+      macdSlow: props.indicators.macd.slowPeriod || 26,
+      macdSignal: props.indicators.macd.signalPeriod || 9,
+      bbPeriod: props.indicators.bollingerBands.period || 20,
+      bbStdDev: props.indicators.bollingerBands.stdDev || 2
+    })
+
+    // Bollinger Bands - отображаем на основном графике
+    if (props.indicators.bollingerBands.enabled) {
+      updateBollingerBands(processedData, indicatorsData)
+    } else {
+      clearBollingerBands()
+    }
+
+    // RSI - отдельная панель
+    if (props.indicators.rsi.enabled) {
+      updateRSI(processedData, indicatorsData)
+    } else {
+      clearRSI()
+    }
+
+    // MACD - отдельная панель
+    if (props.indicators.macd.enabled) {
+      updateMACD(processedData, indicatorsData)
+    } else {
+      clearMACD()
+    }
+
+    // OBV - отдельная панель
+    if (props.indicators.obv.enabled) {
+      updateOBV(processedData, indicatorsData)
+    } else {
+      clearOBV()
+    }
+  } catch (error) {
+    console.error('❌ Error updating indicators:', error)
+  }
+}
+
+function updateBollingerBands(processedData, indicatorsData) {
+  if (!bbUpperSeries) {
+    const color = props.indicators.bollingerBands.color || '#089981'
+    bbUpperSeries = chart.addLineSeries({
+      color: color,
+      lineWidth: 1,
+      lineStyle: 0,
+      priceLineVisible: false
+    })
+    bbMiddleSeries = chart.addLineSeries({
+      color: color,
+      lineWidth: 2,
+      lineStyle: 0,
+      priceLineVisible: false
+    })
+    bbLowerSeries = chart.addLineSeries({
+      color: color,
+      lineWidth: 1,
+      lineStyle: 0,
+      priceLineVisible: false
+    })
+  }
+
+  const upperData = []
+  const middleData = []
+  const lowerData = []
+
+  for (let i = 0; i < processedData.length; i++) {
+    if (indicatorsData.bbUpper[i] !== null) {
+      upperData.push({ time: processedData[i].time, value: indicatorsData.bbUpper[i] })
+      middleData.push({ time: processedData[i].time, value: indicatorsData.bbMiddle[i] })
+      lowerData.push({ time: processedData[i].time, value: indicatorsData.bbLower[i] })
+    }
+  }
+
+  bbUpperSeries.setData(upperData)
+  bbMiddleSeries.setData(middleData)
+  bbLowerSeries.setData(lowerData)
+}
+
+function clearBollingerBands() {
+  if (bbUpperSeries) {
+    chart.removeSeries(bbUpperSeries)
+    bbUpperSeries = null
+  }
+  if (bbMiddleSeries) {
+    chart.removeSeries(bbMiddleSeries)
+    bbMiddleSeries = null
+  }
+  if (bbLowerSeries) {
+    chart.removeSeries(bbLowerSeries)
+    bbLowerSeries = null
+  }
+}
+
+function updateRSI(processedData, indicatorsData) {
+  if (!rsiSeries) {
+    const color = props.indicators.rsi.color || '#2962FF'
+    rsiSeries = chart.addLineSeries({
+      color: color,
+      lineWidth: 2,
+      priceLineVisible: false,
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01
+      }
+    })
+
+    // Добавляем линии уровней
+    rsiOverboughtLine = chart.addLineSeries({
+      color: 'rgba(255, 82, 82, 0.3)',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false
+    })
+
+    rsiOversoldLine = chart.addLineSeries({
+      color: 'rgba(38, 166, 154, 0.3)',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false
+    })
+
+    // Устанавливаем линии уровней
+    const overboughtData = processedData.map(candle => ({ time: candle.time, value: 70 }))
+    const oversoldData = processedData.map(candle => ({ time: candle.time, value: 30 }))
+    rsiOverboughtLine.setData(overboughtData)
+    rsiOversoldLine.setData(oversoldData)
+  }
+
+  const rsiData = []
+  for (let i = 0; i < processedData.length; i++) {
+    if (indicatorsData.rsi[i] !== null && !isNaN(indicatorsData.rsi[i])) {
+      rsiData.push({ time: processedData[i].time, value: indicatorsData.rsi[i] })
+    }
+  }
+
+  rsiSeries.setData(rsiData)
+}
+
+function clearRSI() {
+  if (rsiSeries) {
+    chart.removeSeries(rsiSeries)
+    rsiSeries = null
+  }
+  if (rsiOverboughtLine) {
+    chart.removeSeries(rsiOverboughtLine)
+    rsiOverboughtLine = null
+  }
+  if (rsiOversoldLine) {
+    chart.removeSeries(rsiOversoldLine)
+    rsiOversoldLine = null
+  }
+}
+
+function updateMACD(processedData, indicatorsData) {
+  if (!macdSeries) {
+    const macdColor = props.indicators.macd.macdColor || '#2962FF'
+    const signalColor = props.indicators.macd.signalColor || '#FF6D00'
+
+    macdSeries = chart.addLineSeries({
+      color: macdColor,
+      lineWidth: 2,
+      priceLineVisible: false
+    })
+
+    macdSignalSeries = chart.addLineSeries({
+      color: signalColor,
+      lineWidth: 2,
+      priceLineVisible: false
+    })
+
+    macdHistogramSeries = chart.addHistogramSeries({
+      color: '#26a69a',
+      priceFormat: {
+        type: 'volume'
+      },
+      priceLineVisible: false,
+      priceScaleId: ''
+    })
+
+    macdZeroLine = chart.addLineSeries({
+      color: 'rgba(128, 128, 128, 0.3)',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false
+    })
+
+    const zeroData = processedData.map(candle => ({ time: candle.time, value: 0 }))
+    macdZeroLine.setData(zeroData)
+  }
+
+  const macdData = []
+  const signalData = []
+  const histogramData = []
+
+  for (let i = 0; i < processedData.length; i++) {
+    if (indicatorsData.macd[i] !== null && !isNaN(indicatorsData.macd[i])) {
+      macdData.push({ time: processedData[i].time, value: indicatorsData.macd[i] })
+    }
+    if (indicatorsData.macdSignal[i] !== null && !isNaN(indicatorsData.macdSignal[i])) {
+      signalData.push({ time: processedData[i].time, value: indicatorsData.macdSignal[i] })
+    }
+    if (indicatorsData.macdHistogram[i] !== null && !isNaN(indicatorsData.macdHistogram[i])) {
+      const value = indicatorsData.macdHistogram[i]
+      histogramData.push({
+        time: processedData[i].time,
+        value: value,
+        color: value >= 0 ? '#26a69a' : '#ef5350'
+      })
+    }
+  }
+
+  macdSeries.setData(macdData)
+  macdSignalSeries.setData(signalData)
+  macdHistogramSeries.setData(histogramData)
+}
+
+function clearMACD() {
+  if (macdSeries) {
+    chart.removeSeries(macdSeries)
+    macdSeries = null
+  }
+  if (macdSignalSeries) {
+    chart.removeSeries(macdSignalSeries)
+    macdSignalSeries = null
+  }
+  if (macdHistogramSeries) {
+    chart.removeSeries(macdHistogramSeries)
+    macdHistogramSeries = null
+  }
+  if (macdZeroLine) {
+    chart.removeSeries(macdZeroLine)
+    macdZeroLine = null
+  }
+}
+
+function updateOBV(processedData, indicatorsData) {
+  if (!obvSeries) {
+    const color = props.indicators.obv.color || '#9C27B0'
+    obvSeries = chart.addLineSeries({
+      color: color,
+      lineWidth: 2,
+      priceLineVisible: false
+    })
+  }
+
+  const obvData = []
+  for (let i = 0; i < processedData.length; i++) {
+    if (indicatorsData.obv[i] !== null && !isNaN(indicatorsData.obv[i])) {
+      obvData.push({ time: processedData[i].time, value: indicatorsData.obv[i] })
+    }
+  }
+
+  obvSeries.setData(obvData)
+}
+
+function clearOBV() {
+  if (obvSeries) {
+    chart.removeSeries(obvSeries)
+    obvSeries = null
   }
 }
 
@@ -387,15 +691,21 @@ function updateSignalsMarkers() {
 function destroyChart() {
   if (chart) {
     console.log('🗑️ Destroying unified chart')
-    
+
     if (chart._resizeObserver) {
       chart._resizeObserver.disconnect()
     }
-    
+
+    // Очищаем все индикаторы
+    clearBollingerBands()
+    clearRSI()
+    clearMACD()
+    clearOBV()
+
     chart.remove()
     chart = null
     candlestickSeries = null
-    
+
     console.log('✅ Chart destroyed')
   }
 }
@@ -446,6 +756,13 @@ watch(() => props.ticker, () => {
     candlestickSeries.setMarkers([])
   }
 })
+
+watch(() => props.indicators, () => {
+  console.log('📄 Indicators changed, updating chart')
+  if (chart && candlestickSeries && hasData.value) {
+    updateChartData()
+  }
+}, { deep: true })
 </script>
 
 <style scoped>
