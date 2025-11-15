@@ -3,6 +3,7 @@
 Класс для работы с PostgreSQL с универсальными методами для нового API
 """
 import logging
+import time
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from contextlib import contextmanager, asynccontextmanager
@@ -11,7 +12,7 @@ from sqlalchemy import create_engine, func, and_, or_, desc, asc, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .models import *
 
@@ -65,17 +66,47 @@ class Database:
         return url
     
     @contextmanager
-    def session(self):
-        """Контекстный менеджер для синхронных операций"""
+    def session(self, max_retries: int = 3):
+        """
+        Контекстный менеджер для синхронных операций с retry для deadlocks
+
+        Args:
+            max_retries: Максимум попыток при deadlock
+        """
         session = self.SessionLocal()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                yield session
+                session.commit()
+                break  # Успех, выходим из цикла
+            except OperationalError as e:
+                session.rollback()
+                # Проверяем, является ли это deadlock
+                if "deadlock detected" in str(e).lower():
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        wait_time = 0.1 * (2 ** retry_count)  # Exponential backoff
+                        logger.warning(f"Deadlock detected, retry {retry_count}/{max_retries} after {wait_time}s")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Deadlock: max retries ({max_retries}) exceeded")
+                        raise
+                else:
+                    # Другая OperationalError, не deadlock
+                    raise
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                if retry_count >= max_retries or session.is_active:
+                    pass  # Не закрываем, если еще будет retry
+                else:
+                    session.close()
+
+        session.close()
     
     @asynccontextmanager
     async def async_session(self):

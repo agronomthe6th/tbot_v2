@@ -344,13 +344,15 @@ class SignalMatcher:
         return []
     
     def _get_active_positions(self) -> List[Dict]:
-        """Получение активных позиций для отслеживания (без изменений)"""
+        """Получение активных позиций для отслеживания с блокировкой"""
         try:
             with self.db.session() as session:
+                # Используем SELECT FOR UPDATE для предотвращения race conditions
+                # SKIP LOCKED пропускает уже заблокированные строки
                 results = session.query(SignalResult).filter(
                     SignalResult.status == 'active'
-                ).all()
-                
+                ).with_for_update(skip_locked=True).all()
+
                 return [
                     {
                         'id': str(result.id),

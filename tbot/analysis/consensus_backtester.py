@@ -4,6 +4,7 @@
 """
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from decimal import Decimal
@@ -59,6 +60,28 @@ class ConsensusBacktester:
         Returns:
             Словарь с результатами бэктеста
         """
+        # ===== ВАЛИДАЦИЯ ВХОДНЫХ ДАННЫХ =====
+        if not isinstance(rule_id, int) or rule_id <= 0:
+            raise ValueError(f"Invalid rule_id: {rule_id}. Must be positive integer.")
+
+        if start_date >= end_date:
+            raise ValueError(f"start_date ({start_date}) must be before end_date ({end_date})")
+
+        if not (0 < take_profit_pct <= 100):
+            raise ValueError(f"Invalid take_profit_pct: {take_profit_pct}. Must be between 0 and 100.")
+
+        if not (0 < stop_loss_pct <= 100):
+            raise ValueError(f"Invalid stop_loss_pct: {stop_loss_pct}. Must be between 0 and 100.")
+
+        if holding_hours <= 0:
+            raise ValueError(f"Invalid holding_hours: {holding_hours}. Must be positive.")
+
+        if initial_capital <= 0:
+            raise ValueError(f"Invalid initial_capital: {initial_capital}. Must be positive.")
+
+        if not (0 < position_size_pct <= 100):
+            raise ValueError(f"Invalid position_size_pct: {position_size_pct}. Must be between 0 and 100.")
+
         start_time = time.time()
 
         try:
@@ -253,8 +276,8 @@ class ConsensusBacktester:
         position_value = capital * (position_size_pct / 100)
         shares = int(position_value / entry_price)
 
-        if shares == 0:
-            logger.debug(f"Position too small for {ticker}: capital={capital}, price={entry_price}")
+        if shares <= 0:
+            logger.debug(f"Invalid position size for {ticker}: shares={shares}, capital={capital}, price={entry_price}")
             return None
 
         # Устанавливаем целевые уровни
@@ -294,7 +317,10 @@ class ConsensusBacktester:
             if last_candle:
                 exit_price = float(last_candle.close)
                 exit_candle_time = last_candle.time
-            # Если нет свечей вообще, используем цену входа (P&L = 0)
+            else:
+                # Если нет свечей вообще, пропускаем эту сделку
+                logger.warning(f"No candles available for {ticker} after {entry_candle.time}, skipping trade")
+                return None
 
         else:
             # Проходим по свечам и ищем точку выхода
@@ -463,11 +489,15 @@ class ConsensusBacktester:
 
 # Singleton instance
 backtester_instance = None
+_backtester_lock = threading.Lock()
 
 
 def get_consensus_backtester(db: Database) -> ConsensusBacktester:
-    """Получить экземпляр бэктестера"""
+    """Получить экземпляр бэктестера (thread-safe)"""
     global backtester_instance
     if backtester_instance is None:
-        backtester_instance = ConsensusBacktester(db)
+        with _backtester_lock:
+            # Double-check locking pattern
+            if backtester_instance is None:
+                backtester_instance = ConsensusBacktester(db)
     return backtester_instance

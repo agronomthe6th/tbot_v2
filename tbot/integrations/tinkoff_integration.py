@@ -5,17 +5,93 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple
 import pytz
 import os
+from functools import wraps
+import time
 
 logger = logging.getLogger(__name__)
 
+# ===== RETRY LOGIC & RATE LIMITING =====
+
+class RateLimiter:
+    """Simple rate limiter for API calls"""
+    def __init__(self, max_calls: int = 100, period: int = 60):
+        """
+        Args:
+            max_calls: Максимум вызовов
+            period: Период в секундах
+        """
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        """Ждет пока не освободится слот для вызова"""
+        async with self._lock:
+            now = time.time()
+            # Удаляем старые вызовы
+            self.calls = [call_time for call_time in self.calls if now - call_time < self.period]
+
+            if len(self.calls) >= self.max_calls:
+                sleep_time = self.period - (now - self.calls[0])
+                logger.warning(f"⏱️ Rate limit reached, sleeping {sleep_time:.2f}s")
+                await asyncio.sleep(sleep_time)
+                # Перепроверяем после ожидания
+                return await self.acquire()
+
+            self.calls.append(now)
+
+def async_retry(max_attempts: int = 3, backoff_base: float = 2.0, timeout: int = 30):
+    """
+    Декоратор для retry с exponential backoff и timeout
+
+    Args:
+        max_attempts: Максимум попыток
+        backoff_base: Базовое время ожидания (экспоненциально растет)
+        timeout: Таймаут для каждой попытки в секундах
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(max_attempts):
+                try:
+                    # Оборачиваем в timeout
+                    return await asyncio.wait_for(
+                        func(*args, **kwargs),
+                        timeout=timeout
+                    )
+                except asyncio.TimeoutError as e:
+                    last_exception = e
+                    logger.warning(f"⏱️ Timeout on attempt {attempt + 1}/{max_attempts} for {func.__name__}")
+                except Exception as e:
+                    last_exception = e
+                    logger.warning(f"⚠️ Error on attempt {attempt + 1}/{max_attempts} for {func.__name__}: {e}")
+
+                # Если это не последняя попытка, ждем
+                if attempt < max_attempts - 1:
+                    sleep_time = backoff_base ** attempt
+                    logger.info(f"🔄 Retrying in {sleep_time}s...")
+                    await asyncio.sleep(sleep_time)
+
+            # Если все попытки провалились
+            logger.error(f"❌ All {max_attempts} attempts failed for {func.__name__}")
+            raise last_exception
+
+        return wrapper
+    return decorator
+
 class TinkoffIntegration:
     """ПОЛНАЯ интеграция с Tinkoff API с правильным target + все оригинальные методы"""
-    
-    def __init__(self, token: str, sandbox: bool = True):
+
+    def __init__(self, token: str, sandbox: bool = True, rate_limit: int = 100):
         self.token = token
         self.sandbox = sandbox
         self.client = None
         self.instruments_cache = {}
+        # Rate limiter: макс 100 запросов в минуту (по умолчанию)
+        self.rate_limiter = RateLimiter(max_calls=rate_limit, period=60)
         
         # Проверяем наличие библиотеки
         try:
@@ -134,88 +210,86 @@ class TinkoffIntegration:
                 logger.error(f"❌ Error searching for {ticker}: {e}")
                 return None
 
+    @async_retry(max_attempts=3, backoff_base=2.0, timeout=30)
     async def get_current_price(self, ticker: str) -> Optional[Dict]:
-        """Получение текущей цены инструмента с правильным target"""
-        try:
-            # Сначала находим инструмент
-            instrument = await self.find_instrument_by_ticker(ticker)
-            if not instrument:
-                return None
-            
-            async with AsyncClient(self.token, target=self.target) as client:
-                # Получаем последнюю цену
-                response = await client.market_data.get_last_prices(
-                    figi=[instrument['figi']]
-                )
-                
-                if response.last_prices:
-                    last_price = response.last_prices[0]
-                    price_value = float(last_price.price.units) + float(last_price.price.nano) / 1e9
-                    
-                    return {
-                        "ticker": ticker,
-                        "figi": instrument['figi'],
-                        "price": price_value,
-                        "currency": instrument['currency'],
-                        "timestamp": datetime.now().isoformat(),
-                        "source": f"tinkoff_api_{'sandbox' if self.sandbox else 'production'}"
-                    }
-                
-                return None
-                
-        except Exception as e:
-            logger.error(f"❌ Error getting price for {ticker}: {e}")
+        """Получение текущей цены инструмента с retry и rate limiting"""
+        # Rate limiting
+        await self.rate_limiter.acquire()
+
+        # Сначала находим инструмент
+        instrument = await self.find_instrument_by_ticker(ticker)
+        if not instrument:
             return None
 
+        async with AsyncClient(self.token, target=self.target) as client:
+            # Получаем последнюю цену
+            response = await client.market_data.get_last_prices(
+                figi=[instrument['figi']]
+            )
+
+            if response.last_prices:
+                last_price = response.last_prices[0]
+                price_value = float(last_price.price.units) + float(last_price.price.nano) / 1e9
+
+                return {
+                    "ticker": ticker,
+                    "figi": instrument['figi'],
+                    "price": price_value,
+                    "currency": instrument['currency'],
+                    "timestamp": datetime.now().isoformat(),
+                    "source": f"tinkoff_api_{'sandbox' if self.sandbox else 'production'}"
+                }
+
+            return None
+
+    @async_retry(max_attempts=3, backoff_base=2.0, timeout=60)
     async def get_candles(self, figi: str, interval: str, from_time: datetime, to_time: Optional[datetime] = None) -> List[Dict]:
-        """Получение свечей для инструмента с валидацией и дедупликацией"""
-        try:
-            if to_time is None:
-                to_time = datetime.now(pytz.UTC)
-            
-            # Конвертируем интервал
-            interval_map = {
-                "1min": CandleInterval.CANDLE_INTERVAL_1_MIN,
-                "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
-                "hour": CandleInterval.CANDLE_INTERVAL_HOUR,
-                "day": CandleInterval.CANDLE_INTERVAL_DAY
-            }
-            
-            if interval not in interval_map:
-                logger.error(f"❌ Unsupported interval: {interval}")
-                return []
-            
-            candles = []
-            async with AsyncClient(self.token, target=self.target) as client:
-                async for candle in client.get_all_candles(
-                    figi=figi,
-                    from_=from_time,
-                    to=to_time,
-                    interval=interval_map[interval]
-                ):
-                    candles.append({
-                        "time": candle.time,
-                        "open": float(candle.open.units) + float(candle.open.nano) / 1e9,
-                        "high": float(candle.high.units) + float(candle.high.nano) / 1e9,
-                        "low": float(candle.low.units) + float(candle.low.nano) / 1e9,
-                        "close": float(candle.close.units) + float(candle.close.nano) / 1e9,
-                        "volume": candle.volume
-                    })
-            
-            logger.info(f"📊 Received {len(candles)} raw candles from Tinkoff API")
-            
-            # 🆕 ВАЛИДИРУЕМ И ОЧИЩАЕМ ДАННЫЕ
-            validated_candles = self._validate_candles_data(candles)
-            
-            # Сортируем по времени для надежности
-            validated_candles.sort(key=lambda x: x['time'])
-            
-            logger.info(f"✅ Returning {len(validated_candles)} validated candles")
-            return validated_candles
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting candles for {figi}: {e}")
+        """Получение свечей для инструмента с валидацией, дедупликацией, retry и rate limiting"""
+        # Rate limiting
+        await self.rate_limiter.acquire()
+
+        if to_time is None:
+            to_time = datetime.now(pytz.UTC)
+
+        # Конвертируем интервал
+        interval_map = {
+            "1min": CandleInterval.CANDLE_INTERVAL_1_MIN,
+            "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
+            "hour": CandleInterval.CANDLE_INTERVAL_HOUR,
+            "day": CandleInterval.CANDLE_INTERVAL_DAY
+        }
+
+        if interval not in interval_map:
+            logger.error(f"❌ Unsupported interval: {interval}")
             return []
+
+        candles = []
+        async with AsyncClient(self.token, target=self.target) as client:
+            async for candle in client.get_all_candles(
+                figi=figi,
+                from_=from_time,
+                to=to_time,
+                interval=interval_map[interval]
+            ):
+                candles.append({
+                    "time": candle.time,
+                    "open": float(candle.open.units) + float(candle.open.nano) / 1e9,
+                    "high": float(candle.high.units) + float(candle.high.nano) / 1e9,
+                    "low": float(candle.low.units) + float(candle.low.nano) / 1e9,
+                    "close": float(candle.close.units) + float(candle.close.nano) / 1e9,
+                    "volume": candle.volume
+                })
+
+        logger.info(f"📊 Received {len(candles)} raw candles from Tinkoff API")
+
+        # ВАЛИДИРУЕМ И ДЕДУПЛИЦИРУЕМ ДАННЫЕ
+        validated_candles = self._validate_and_deduplicate_candles(candles)
+
+        # Сортируем по времени для надежности
+        validated_candles.sort(key=lambda x: x['time'])
+
+        logger.info(f"✅ Returning {len(validated_candles)} validated candles")
+        return validated_candles
 
 
     async def test_connection(self) -> Dict:
@@ -247,18 +321,19 @@ class TinkoffIntegration:
                 "timestamp": datetime.now().isoformat()
             }
 
-    def _validate_candles_data(self, candles: List[Dict]) -> List[Dict]:
+    def _validate_and_deduplicate_candles(self, candles: List[Dict]) -> List[Dict]:
         """
-        Валидирует и очищает данные свечей от API
-        
+        Валидирует, очищает и дедуплицирует данные свечей от API
+
         Args:
             candles: сырые данные от Tinkoff API
-            
+
         Returns:
-            List[Dict]: валидированные данные
+            List[Dict]: валидированные и дедуплицированные данные
         """
         valid_candles = []
-        
+        seen_times = set()  # Для отслеживания дубликатов
+
         for i, candle in enumerate(candles):
             try:
                 # Проверяем обязательные поля
@@ -266,30 +341,37 @@ class TinkoffIntegration:
                 if not all(field in candle for field in required_fields):
                     logger.warning(f"⚠️ Skipping candle {i}: missing required fields")
                     continue
-                
+
+                # Проверка на дубликаты по времени
+                candle_time = candle['time']
+                if candle_time in seen_times:
+                    logger.warning(f"⚠️ Skipping duplicate candle at {candle_time}")
+                    continue
+                seen_times.add(candle_time)
+
                 # Проверяем логичность цен
                 open_price = float(candle['open'])
                 high_price = float(candle['high'])
                 low_price = float(candle['low'])
                 close_price = float(candle['close'])
-                
-                if not (low_price <= open_price <= high_price and 
+
+                if not (low_price <= open_price <= high_price and
                     low_price <= close_price <= high_price):
                     logger.warning(f"⚠️ Skipping candle {i}: invalid OHLC values")
                     continue
-                
+
                 # Проверяем что цены положительные
                 if any(price <= 0 for price in [open_price, high_price, low_price, close_price]):
                     logger.warning(f"⚠️ Skipping candle {i}: negative or zero prices")
                     continue
-                
+
                 valid_candles.append(candle)
-                
+
             except (ValueError, TypeError) as e:
                 logger.warning(f"⚠️ Skipping candle {i}: validation error {e}")
                 continue
-        
-        logger.info(f"✅ Validated {len(valid_candles)}/{len(candles)} candles")
+
+        logger.info(f"✅ Validated and deduplicated {len(valid_candles)}/{len(candles)} candles")
         return valid_candles
 
     async def get_popular_instruments(self, limit: int = 50) -> List[Dict]:

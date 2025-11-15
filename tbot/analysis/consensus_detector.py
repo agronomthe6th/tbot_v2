@@ -5,6 +5,7 @@ MVP версия с заготовкой под V1
 """
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from uuid import UUID
@@ -160,7 +161,10 @@ class ConsensusDetector:
         Returns:
             Dict с информацией о консенсусе если найден, иначе None
         """
-        return self.check_new_signal_sync(signal_id)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        # Запускаем синхронный метод в executor чтобы не блокировать event loop
+        return await loop.run_in_executor(None, self.check_new_signal_sync, signal_id)
     
     def _find_consensus_window(self, session, signal: ParsedSignal,
                                window_minutes: int, min_traders: int,
@@ -256,8 +260,8 @@ class ConsensusDetector:
         ).order_by(Candle.time.desc()).limit(100).all()
 
         if len(candles) < 30:
-            logger.debug(f"Not enough candles for {ticker}: {len(candles)}")
-            return True  # Пропускаем проверку если недостаточно данных
+            logger.warning(f"Not enough candles for {ticker}: {len(candles)}, rejecting consensus")
+            return False  # Отклоняем консенсус если недостаточно данных для индикаторов
 
         # Преобразуем в DataFrame
         df = pd.DataFrame([{
@@ -456,10 +460,14 @@ class ConsensusDetector:
 
 
 consensus_detector_instance = None
+_detector_lock = threading.Lock()
 
 def get_consensus_detector(db: Database) -> ConsensusDetector:
-    """Получить экземпляр детектора консенсуса"""
+    """Получить экземпляр детектора консенсуса (thread-safe)"""
     global consensus_detector_instance
     if consensus_detector_instance is None:
-        consensus_detector_instance = ConsensusDetector(db)
+        with _detector_lock:
+            # Double-check locking pattern
+            if consensus_detector_instance is None:
+                consensus_detector_instance = ConsensusDetector(db)
     return consensus_detector_instance
