@@ -8,11 +8,13 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from uuid import UUID
+import pandas as pd
 
 from sqlalchemy import and_, func
 from core.database.database import Database
-from core.database.models import ParsedSignal, ConsensusEvent, ConsensusSignal
+from core.database.models import ParsedSignal, ConsensusEvent, ConsensusSignal, Candle
 from utils.datetime_utils import now_utc, ensure_timezone_aware
+from analysis.technical_indicators import TechnicalIndicators
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +210,12 @@ class ConsensusDetector:
             )
             return None
 
+        # Проверяем условия технических индикаторов, если они заданы
+        if rule and rule.indicator_conditions:
+            if not self._check_indicator_conditions(session, ticker, signal_time, rule.indicator_conditions):
+                logger.debug(f"Indicator conditions not met for {ticker}")
+                return None
+
         return {
             'signals': consensus_signals,
             'direction': consensus_direction,
@@ -216,6 +224,97 @@ class ConsensusDetector:
             'window_end': window_end,
             'window_minutes': window_minutes
         }
+
+    def _check_indicator_conditions(self, session, ticker: str, timestamp: datetime,
+                                   conditions: Dict) -> bool:
+        """
+        Проверяет условия технических индикаторов
+
+        Args:
+            session: Сессия БД
+            ticker: Тикер
+            timestamp: Временная метка сигнала
+            conditions: Словарь с условиями индикаторов
+
+        Returns:
+            True если все условия выполнены, False иначе
+        """
+        if not conditions:
+            return True
+
+        # Загружаем исторические данные (последние 100 свечей)
+        candles = session.query(Candle).filter(
+            and_(
+                Candle.instrument_id.in_(
+                    session.query(Candle.instrument_id).join(
+                        ParsedSignal, ParsedSignal.figi == Candle.instrument_id
+                    ).filter(ParsedSignal.ticker == ticker).limit(1)
+                ),
+                Candle.time <= timestamp,
+                Candle.interval == 'hour'  # Используем часовые свечи
+            )
+        ).order_by(Candle.time.desc()).limit(100).all()
+
+        if len(candles) < 30:
+            logger.debug(f"Not enough candles for {ticker}: {len(candles)}")
+            return True  # Пропускаем проверку если недостаточно данных
+
+        # Преобразуем в DataFrame
+        df = pd.DataFrame([{
+            'time': c.time,
+            'open': float(c.open),
+            'high': float(c.high),
+            'low': float(c.low),
+            'close': float(c.close),
+            'volume': int(c.volume) if c.volume else 0
+        } for c in reversed(candles)])
+
+        df.set_index('time', inplace=True)
+
+        # Вычисляем индикаторы
+        df_with_indicators = TechnicalIndicators.calculate_all_indicators(df)
+        signals = TechnicalIndicators.get_indicator_signals(df_with_indicators)
+
+        # Проверяем каждое условие
+        for indicator_name, condition in conditions.items():
+            if not condition.get('enabled', False):
+                continue
+
+            if indicator_name == 'rsi':
+                rsi_value = df_with_indicators['rsi'].iloc[-1]
+                if pd.isna(rsi_value):
+                    continue
+
+                min_rsi = condition.get('min')
+                max_rsi = condition.get('max')
+
+                if min_rsi is not None and rsi_value < min_rsi:
+                    logger.debug(f"RSI {rsi_value} < {min_rsi}")
+                    return False
+                if max_rsi is not None and rsi_value > max_rsi:
+                    logger.debug(f"RSI {rsi_value} > {max_rsi}")
+                    return False
+
+            elif indicator_name == 'macd':
+                expected_signal = condition.get('signal')
+                if expected_signal and signals.get('macd') != expected_signal:
+                    logger.debug(f"MACD signal {signals.get('macd')} != {expected_signal}")
+                    return False
+
+            elif indicator_name == 'bollinger':
+                expected_signal = condition.get('signal')
+                if expected_signal and signals.get('bollinger') != expected_signal:
+                    logger.debug(f"Bollinger signal {signals.get('bollinger')} != {expected_signal}")
+                    return False
+
+            elif indicator_name == 'obv':
+                expected_signal = condition.get('signal')
+                if expected_signal and signals.get('obv') != expected_signal:
+                    logger.debug(f"OBV signal {signals.get('obv')} != {expected_signal}")
+                    return False
+
+        logger.debug(f"All indicator conditions met for {ticker}")
+        return True
     
     def _group_by_direction(self, signals: List[ParsedSignal]) -> Dict[str, List[ParsedSignal]]:
         """Группируем сигналы по направлению"""

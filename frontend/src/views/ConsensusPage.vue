@@ -28,6 +28,13 @@
             >
               📋 Правила детекции
             </button>
+            <button
+              @click="activeTab = 'backtest'"
+              :class="activeTab === 'backtest' ? 'border-trading-green text-white' : 'border-transparent text-gray-400 hover:text-gray-300'"
+              class="px-4 py-3 border-b-2 font-semibold transition-colors"
+            >
+              🧪 Бэктестинг
+            </button>
           </div>
         </div>
 
@@ -377,6 +384,11 @@
             </div>
           </div>
         </div>
+
+        <!-- Вкладка: Бэктестинг -->
+        <div v-if="activeTab === 'backtest'">
+          <ConsensusBacktest :rules="rules" />
+        </div>
       </div>
     </div>
 
@@ -525,6 +537,124 @@
               </label>
             </div>
           </div>
+
+          <!-- Технические индикаторы -->
+          <div class="border-t border-trading-border pt-4">
+            <h4 class="text-lg font-semibold text-white mb-3">📊 Технические индикаторы (опционально)</h4>
+
+            <!-- RSI -->
+            <div class="bg-trading-bg p-3 rounded mb-3">
+              <div class="flex items-center mb-2">
+                <input
+                  v-model="ruleForm.indicator_conditions.rsi.enabled"
+                  type="checkbox"
+                  id="rsi-enabled"
+                  class="w-4 h-4 text-trading-green bg-trading-dark border-trading-border rounded"
+                />
+                <label for="rsi-enabled" class="ml-2 text-white font-semibold">RSI (Relative Strength Index)</label>
+              </div>
+              <div v-if="ruleForm.indicator_conditions.rsi.enabled" class="grid grid-cols-2 gap-3 ml-6">
+                <div>
+                  <label class="block text-gray-400 text-xs mb-1">Мин. RSI</label>
+                  <input
+                    v-model.number="ruleForm.indicator_conditions.rsi.min"
+                    type="number"
+                    min="0"
+                    max="100"
+                    placeholder="0"
+                    class="w-full bg-trading-card border border-trading-border rounded px-2 py-1 text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label class="block text-gray-400 text-xs mb-1">Макс. RSI</label>
+                  <input
+                    v-model.number="ruleForm.indicator_conditions.rsi.max"
+                    type="number"
+                    min="0"
+                    max="100"
+                    placeholder="100"
+                    class="w-full bg-trading-card border border-trading-border rounded px-2 py-1 text-white text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- MACD -->
+            <div class="bg-trading-bg p-3 rounded mb-3">
+              <div class="flex items-center mb-2">
+                <input
+                  v-model="ruleForm.indicator_conditions.macd.enabled"
+                  type="checkbox"
+                  id="macd-enabled"
+                  class="w-4 h-4 text-trading-green bg-trading-dark border-trading-border rounded"
+                />
+                <label for="macd-enabled" class="ml-2 text-white font-semibold">MACD</label>
+              </div>
+              <div v-if="ruleForm.indicator_conditions.macd.enabled" class="ml-6">
+                <label class="block text-gray-400 text-xs mb-1">Сигнал</label>
+                <select
+                  v-model="ruleForm.indicator_conditions.macd.signal"
+                  class="w-full bg-trading-card border border-trading-border rounded px-2 py-1 text-white text-sm"
+                >
+                  <option value="">Любой</option>
+                  <option value="bullish_crossover">Бычье пересечение</option>
+                  <option value="bearish_crossover">Медвежье пересечение</option>
+                  <option value="bullish">Бычий</option>
+                  <option value="bearish">Медвежий</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Bollinger Bands -->
+            <div class="bg-trading-bg p-3 rounded mb-3">
+              <div class="flex items-center mb-2">
+                <input
+                  v-model="ruleForm.indicator_conditions.bollinger.enabled"
+                  type="checkbox"
+                  id="bollinger-enabled"
+                  class="w-4 h-4 text-trading-green bg-trading-dark border-trading-border rounded"
+                />
+                <label for="bollinger-enabled" class="ml-2 text-white font-semibold">Bollinger Bands</label>
+              </div>
+              <div v-if="ruleForm.indicator_conditions.bollinger.enabled" class="ml-6">
+                <label class="block text-gray-400 text-xs mb-1">Сигнал</label>
+                <select
+                  v-model="ruleForm.indicator_conditions.bollinger.signal"
+                  class="w-full bg-trading-card border border-trading-border rounded px-2 py-1 text-white text-sm"
+                >
+                  <option value="">Любой</option>
+                  <option value="at_upper_band">У верхней границы</option>
+                  <option value="at_lower_band">У нижней границы</option>
+                  <option value="within_bands">Внутри полос</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- OBV -->
+            <div class="bg-trading-bg p-3 rounded">
+              <div class="flex items-center mb-2">
+                <input
+                  v-model="ruleForm.indicator_conditions.obv.enabled"
+                  type="checkbox"
+                  id="obv-enabled"
+                  class="w-4 h-4 text-trading-green bg-trading-dark border-trading-border rounded"
+                />
+                <label for="obv-enabled" class="ml-2 text-white font-semibold">OBV (On-Balance Volume)</label>
+              </div>
+              <div v-if="ruleForm.indicator_conditions.obv.enabled" class="ml-6">
+                <label class="block text-gray-400 text-xs mb-1">Сигнал</label>
+                <select
+                  v-model="ruleForm.indicator_conditions.obv.signal"
+                  class="w-full bg-trading-card border border-trading-border rounded px-2 py-1 text-white text-sm"
+                >
+                  <option value="">Любой</option>
+                  <option value="accumulation">Накопление</option>
+                  <option value="distribution">Распределение</option>
+                  <option value="neutral">Нейтрально</option>
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="flex gap-3 mt-6">
@@ -550,6 +680,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { tradingAPI } from '../services/api'
+import ConsensusBacktest from '../components/ConsensusBacktest.vue'
 
 // Общие состояния
 const activeTab = ref('events')
@@ -589,7 +720,13 @@ const ruleForm = ref({
   min_confidence: null,
   min_strength: null,
   is_active: true,
-  priority: 0
+  priority: 0,
+  indicator_conditions: {
+    rsi: { enabled: false, min: null, max: null },
+    macd: { enabled: false, signal: '' },
+    bollinger: { enabled: false, signal: '' },
+    obv: { enabled: false, signal: '' }
+  }
 })
 
 const totalPages = computed(() => {
@@ -751,7 +888,13 @@ function openRuleModal(rule = null) {
       min_confidence: rule.min_confidence,
       min_strength: rule.min_strength,
       is_active: rule.is_active,
-      priority: rule.priority
+      priority: rule.priority,
+      indicator_conditions: rule.indicator_conditions || {
+        rsi: { enabled: false, min: null, max: null },
+        macd: { enabled: false, signal: '' },
+        bollinger: { enabled: false, signal: '' },
+        obv: { enabled: false, signal: '' }
+      }
     }
   } else {
     editingRule.value = null
@@ -766,7 +909,13 @@ function openRuleModal(rule = null) {
       min_confidence: null,
       min_strength: null,
       is_active: true,
-      priority: 0
+      priority: 0,
+      indicator_conditions: {
+        rsi: { enabled: false, min: null, max: null },
+        macd: { enabled: false, signal: '' },
+        bollinger: { enabled: false, signal: '' },
+        obv: { enabled: false, signal: '' }
+      }
     }
   }
   showRuleModal.value = true

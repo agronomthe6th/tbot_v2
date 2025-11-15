@@ -1537,6 +1537,7 @@ async def get_consensus_rules(
                     'direction_filter': rule.direction_filter,
                     'min_confidence': rule.min_confidence,
                     'min_strength': rule.min_strength,
+                    'indicator_conditions': rule.indicator_conditions,
                     'notification_settings': rule.notification_settings,
                     'config': rule.config,
                     'created_at': rule.created_at.isoformat() if rule.created_at else None,
@@ -1582,6 +1583,7 @@ async def create_consensus_rule(rule_data: Dict):
                 direction_filter=rule_data.get('direction_filter'),
                 min_confidence=rule_data.get('min_confidence'),
                 min_strength=rule_data.get('min_strength'),
+                indicator_conditions=rule_data.get('indicator_conditions'),
                 notification_settings=rule_data.get('notification_settings'),
                 config=rule_data.get('config'),
                 created_by=rule_data.get('created_by', 'web_ui')
@@ -1631,6 +1633,7 @@ async def get_consensus_rule(rule_id: int):
                 'direction_filter': rule.direction_filter,
                 'min_confidence': rule.min_confidence,
                 'min_strength': rule.min_strength,
+                'indicator_conditions': rule.indicator_conditions,
                 'notification_settings': rule.notification_settings,
                 'config': rule.config,
                 'created_at': rule.created_at.isoformat() if rule.created_at else None,
@@ -1689,6 +1692,8 @@ async def update_consensus_rule(rule_id: int, rule_data: Dict):
                 rule.min_confidence = rule_data['min_confidence']
             if 'min_strength' in rule_data:
                 rule.min_strength = rule_data['min_strength']
+            if 'indicator_conditions' in rule_data:
+                rule.indicator_conditions = rule_data['indicator_conditions']
             if 'notification_settings' in rule_data:
                 rule.notification_settings = rule_data['notification_settings']
             if 'config' in rule_data:
@@ -2041,6 +2046,127 @@ async def manual_consensus_detection(ticker: Optional[str] = None, hours_back: i
             
     except Exception as e:
         logger.error(f"Manual consensus detection failed: {e}", exc_info=True)
+
+# ===== CONSENSUS BACKTESTING ENDPOINTS =====
+
+@app.post("/api/consensus/backtest")
+async def run_consensus_backtest(backtest_params: Dict):
+    """
+    Запустить бэктест правила консенсуса
+
+    Параметры:
+    - rule_id: ID правила для тестирования
+    - start_date: Начало периода (ISO format)
+    - end_date: Конец периода (ISO format)
+    - tickers: Список тикеров (опционально)
+    - take_profit_pct: % для take profit (по умолчанию 5.0)
+    - stop_loss_pct: % для stop loss (по умолчанию 3.0)
+    - holding_hours: Максимальное время удержания позиции (по умолчанию 24)
+    - initial_capital: Начальный капитал для бэктеста в рублях (по умолчанию 100000.0)
+    - position_size_pct: Размер позиции в % от капитала (по умолчанию 10.0)
+    """
+    try:
+        from analysis.consensus_backtester import get_consensus_backtester
+        from datetime import datetime
+
+        rule_id = backtest_params.get('rule_id')
+        if not rule_id:
+            raise HTTPException(status_code=400, detail="rule_id is required")
+
+        start_date = datetime.fromisoformat(backtest_params['start_date'].replace('Z', '+00:00'))
+        end_date = datetime.fromisoformat(backtest_params['end_date'].replace('Z', '+00:00'))
+
+        tickers = backtest_params.get('tickers')
+        take_profit_pct = backtest_params.get('take_profit_pct', 5.0)
+        stop_loss_pct = backtest_params.get('stop_loss_pct', 3.0)
+        holding_hours = backtest_params.get('holding_hours', 24)
+        initial_capital = backtest_params.get('initial_capital', 100000.0)
+        position_size_pct = backtest_params.get('position_size_pct', 10.0)
+
+        backtester = get_consensus_backtester(get_db_manager())
+
+        result = backtester.run_backtest(
+            rule_id=rule_id,
+            start_date=start_date,
+            end_date=end_date,
+            tickers=tickers,
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct,
+            holding_hours=holding_hours,
+            initial_capital=initial_capital,
+            position_size_pct=position_size_pct
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run backtest: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consensus/backtest/{backtest_id}")
+async def get_backtest_result(backtest_id: str):
+    """Получить результаты бэктеста по ID"""
+    try:
+        from analysis.consensus_backtester import get_consensus_backtester
+
+        backtester = get_consensus_backtester(get_db_manager())
+        result = backtester.get_backtest_results(backtest_id)
+
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get backtest result: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consensus/backtest/rule/{rule_id}")
+async def get_rule_backtests(
+    rule_id: int,
+    limit: int = Query(10, ge=1, le=100)
+):
+    """Получить историю бэктестов для правила"""
+    try:
+        from core.database.models import ConsensusBacktest
+
+        db = get_db_manager()
+
+        with db.session() as session:
+            backtests = session.query(ConsensusBacktest).filter(
+                ConsensusBacktest.rule_id == rule_id
+            ).order_by(ConsensusBacktest.created_at.desc()).limit(limit).all()
+
+            results = []
+            for bt in backtests:
+                results.append({
+                    'id': str(bt.id),
+                    'rule_id': bt.rule_id,
+                    'start_date': bt.start_date.isoformat(),
+                    'end_date': bt.end_date.isoformat(),
+                    'tickers': bt.tickers,
+                    'total_consensus_found': bt.total_consensus_found,
+                    'profitable_count': bt.profitable_count,
+                    'loss_count': bt.loss_count,
+                    'win_rate': float(bt.win_rate) if bt.win_rate else 0,
+                    'total_return_pct': float(bt.total_return_pct) if bt.total_return_pct else 0,
+                    'created_at': bt.created_at.isoformat() if bt.created_at else None,
+                    'execution_time_seconds': float(bt.execution_time_seconds) if bt.execution_time_seconds else 0,
+                    'status': bt.status
+                })
+
+            return {
+                'count': len(results),
+                'backtests': results
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get rule backtests: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ===== TELEGRAM SCRAPER ENDPOINTS =====
